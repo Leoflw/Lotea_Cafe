@@ -1,9 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import '../../data/mock_store.dart';
 import '../../models/coffee_lot.dart';
+import '../../models/discover_filters.dart';
+import '../../repositories/coffee_lot_repository.dart';
+import '../../repositories/repo_exception.dart';
 import '../../services/home_tab_notifier.dart';
-import '../../services/session_provider.dart';
+import '../../state/activity_provider.dart';
+import '../../state/session_provider.dart';
+import '../../utils/catalog_logic.dart';
+import '../../widgets/empty_state.dart';
 import '../../theme/app_theme.dart';
 import '../../utils/focus_utils.dart';
 import 'filters_sheet.dart';
@@ -22,7 +27,7 @@ enum ModoDescubrimiento { tarjetas, lista }
 /// contiene ningún campo de texto: la búsqueda vive en [SearchScreen], una
 /// ruta aparte. Sin campo enfocable no hay foco que restaurar.
 ///
-/// Rendimiento: no observa el MockStore. Recarga la lista solo en momentos
+/// Rendimiento: consulta Firestore por páginas. Recalcula la lista solo en momentos
 /// seguros (aplicar búsqueda/filtros/orden, volver de un detalle o reactivar
 /// la pestaña) y únicamente si el catálogo cambió (`catalogRevision`); jamás
 /// en mitad de un swipe, para no desordenar el mazo.
@@ -36,10 +41,18 @@ class DiscoverScreen extends StatefulWidget {
 class _DiscoverScreenState extends State<DiscoverScreen> {
   ModoDescubrimiento _modo = ModoDescubrimiento.tarjetas;
   DiscoverFilters _filtros = const DiscoverFilters();
-  List<CoffeeLot> _lotes = [];
+  final List<CoffeeLot> _acumulados = []; // lotes publicados ya descargados
+  List<CoffeeLot> _lotes = []; // visibles tras filtros, exclusiones y orden
+  dynamic _cursor;
+  bool _hayMas = true;
+  bool _cargando = true;
+  RepoException? _error;
   int _versionMazo = 0; // cambia en cada recarga para reiniciar el CardSwiper limpio
-  int _revisionCargada = -1;
+  String _firmaCargada = '';
   bool _inicializado = false;
+  // Estado anterior de la pestaña (Descubrir = índice 0). Empieza en true: la
+  // primera carga ya la hace didChangeDependencies, y solo al volver desde
+  // otra pestaña se revisa si el catálogo cambió.
   bool _pestanaActivaAnterior = true;
 
   @override
@@ -47,29 +60,95 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
     super.didChangeDependencies();
     if (!_inicializado) {
       _inicializado = true;
-      _lotes = _consultar(); // síncrono: el primer frame ya tiene datos (sin parpadeo de "vacío")
+      _cargar(reiniciar: true);
     }
   }
 
-  List<CoffeeLot> _consultar() {
-    final store = context.read<MockStore>();
-    final uid = context.read<SessionProvider>().usuario!.uid;
-    _revisionCargada = store.catalogRevision;
-    return store.descubrirLotes(compradorId: uid, filtros: _filtros);
+  String _firma() {
+    final a = context.read<ActivityProvider>();
+    return '${a.lotesYaSolicitados.length}|${a.descartes.length}';
   }
 
-  void _recargar() {
+  /// Descarga páginas de lotes publicados hasta reunir una lista útil
+  /// (máx. 5 páginas por pulsación) y recalcula la lista visible.
+  Future<void> _cargar({required bool reiniciar}) async {
+    final repo = context.read<CoffeeLotRepository>();
+    if (reiniciar) {
+      _acumulados.clear();
+      _cursor = null;
+      _hayMas = true;
+      _error = null;
+    }
+    setState(() => _cargando = true);
+    try {
+      var rondas = 0;
+      var utiles = _calcular().length;
+      final meta = utiles + CoffeeLotRepository.tamanoPagina;
+      while (_hayMas && rondas < 5 && utiles < meta) {
+        final pagina = await repo.consultarCatalogo(orden: _filtros.orden, despuesDe: _cursor);
+        if (!mounted) return;
+        _acumulados.addAll(pagina.lotes);
+        _cursor = pagina.cursor;
+        _hayMas = pagina.hayMas;
+        rondas++;
+        utiles = _calcular().length;
+      }
+      _error = null;
+    } on RepoException catch (e) {
+      if (!mounted) return;
+      if (_acumulados.isEmpty) {
+        _error = e;
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(e.mensaje), backgroundColor: AppColors.danger));
+      }
+    }
     if (!mounted) return;
     setState(() {
-      _lotes = _consultar();
+      _lotes = _calcular();
+      _firmaCargada = _firma();
       _versionMazo++;
+      _cargando = false;
     });
   }
 
-  /// Recarga solo si algo del catálogo cambió desde la última carga.
+  List<CoffeeLot> _calcular() {
+    final uid = context.read<SessionProvider>().usuario?.uid;
+    final actividad = context.read<ActivityProvider>();
+    final yaSolicitados = actividad.lotesYaSolicitados;
+    final descartes = actividad.descartes;
+    final filtrados = _acumulados
+        .where((l) =>
+            l.sellerId != uid &&
+            !yaSolicitados.contains(l.id) &&
+            !descartes.contains(l.id) &&
+            CatalogLogic.coincide(l, _filtros))
+        .toList();
+    return CatalogLogic.ordenar(filtrados, _filtros.orden, context.read<SessionProvider>().usuario);
+  }
+
+  /// Lotes descargados visibles para este comprador, sin aplicar la búsqueda.
+  List<CoffeeLot> _calcularBase() {
+    final uid = context.read<SessionProvider>().usuario?.uid;
+    final a = context.read<ActivityProvider>();
+    return _acumulados
+        .where((l) => l.sellerId != uid && !a.lotesYaSolicitados.contains(l.id) && !a.descartes.contains(l.id))
+        .toList();
+  }
+
+  /// Recalcula sin volver a descargar (cambian filtros o exclusiones).
+  void _recargar() {
+    if (!mounted) return;
+    setState(() {
+      _lotes = _calcular();
+      _firmaCargada = _firma();
+      _versionMazo++;
+    });
+    if (_lotes.isEmpty && _hayMas && !_cargando) _cargar(reiniciar: false);
+  }
+
   void _recargarSiCambio() {
     if (!mounted) return;
-    if (context.read<MockStore>().catalogRevision != _revisionCargada) _recargar();
+    if (_firma() != _firmaCargada) _recargar();
   }
 
   Future<void> _abrirBusqueda() async {
@@ -78,6 +157,7 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
       MaterialPageRoute(
         builder: (_) => SearchScreen(
           filtrosBase: _filtros,
+          lotesBase: _calcularBase(),
           onQueryChanged: (q) => _filtros = _filtros.copyWith(busqueda: q),
         ),
       ),
@@ -125,8 +205,17 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
     if (!mounted) return;
     liberarFoco();
     if (elegido != null && elegido != _filtros.orden) {
+      // Firestore solo ordena por fecha o precio; otros órdenes se aplican
+      // en el cliente sobre lo ya descargado.
+      String ordenServidor(DiscoverSort o) =>
+          o == DiscoverSort.precioAsc ? 'precioAsc' : (o == DiscoverSort.precioDesc ? 'precioDesc' : 'fecha');
+      final cambiaServidor = ordenServidor(elegido) != ordenServidor(_filtros.orden);
       _filtros = _filtros.copyWith(orden: elegido);
-      _recargar();
+      if (cambiaServidor) {
+        _cargar(reiniciar: true);
+      } else {
+        _recargar();
+      }
     }
   }
 
@@ -232,7 +321,7 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
                   children: [
                     Expanded(
                       child: Text(
-                        '${_lotes.length} ${_lotes.length == 1 ? 'café encontrado' : 'cafés encontrados'}',
+                        '${_lotes.length}${_hayMas ? '+' : ''} ${_lotes.length == 1 ? 'café encontrado' : 'cafés encontrados'}',
                         style: TextStyle(color: Colors.grey.shade700, fontSize: 12.5),
                       ),
                     ),
@@ -243,8 +332,21 @@ class _DiscoverScreenState extends State<DiscoverScreen> {
             ),
           ),
           Expanded(
-            child: _lotes.isEmpty
+            child: (_cargando && _acumulados.isEmpty)
+                ? const Center(child: CircularProgressIndicator(color: AppColors.coffeeMedium))
+                : (_error != null && _acumulados.isEmpty)
+                    ? RepoErrorView(error: _error!, onReintentar: () => _cargar(reiniciar: true))
+                    : (_acumulados.isEmpty && !_hayMas)
+                        ? const EmptyState(
+                            icono: Icons.coffee_outlined,
+                            titulo: 'Todavía no hay cafés publicados',
+                            subtitulo: 'Cuando los productores publiquen sus lotes, podrás descubrirlos aquí.',
+                          )
+                        : _lotes.isEmpty
                 ? _EstadoVacio(
+                    hayMas: _hayMas,
+                    cargando: _cargando,
+                    onCargarMas: () => _cargar(reiniciar: false),
                     hayBusqueda: hayBusqueda,
                     hayFiltros: nFiltros > 0,
                     consulta: _filtros.busqueda.trim(),
@@ -310,8 +412,14 @@ class _EstadoVacio extends StatelessWidget {
   final VoidCallback onLimpiarFiltros;
   final VoidCallback onLimpiarBusqueda;
   final VoidCallback onVerGuardados;
+  final bool hayMas;
+  final bool cargando;
+  final VoidCallback onCargarMas;
 
   const _EstadoVacio({
+    required this.hayMas,
+    required this.cargando,
+    required this.onCargarMas,
     required this.hayBusqueda,
     required this.hayFiltros,
     required this.consulta,
@@ -341,6 +449,9 @@ class _EstadoVacio extends StatelessWidget {
       acciones.add(_accion('Ver guardados', onVerGuardados, principal: true));
     }
 
+    if (hayMas) {
+      acciones.add(_accion(cargando ? 'Buscando…' : 'Buscar más cafés', cargando ? () {} : onCargarMas));
+    }
     return Center(
       child: SingleChildScrollView(
         padding: const EdgeInsets.all(28),

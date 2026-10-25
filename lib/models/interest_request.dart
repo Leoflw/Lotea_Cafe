@@ -1,6 +1,8 @@
-/// Reemplaza al antiguo "MatchModel". Representa el interés comercial de
-/// un comprador por un lote de café concreto — NO se crea automáticamente
-/// al deslizar: solo cuando el comprador confirma "Me interesa".
+import '../data/codec.dart';
+
+/// Solicitud comercial de un comprador por un lote ("Me interesa").
+/// Documento `interestRequests/{compradorId}_{coffeeLotId}`: el id
+/// determinista impide duplicados activos para el mismo comprador y lote.
 enum EstadoSolicitud { pendiente, aceptada, rechazada }
 
 extension EstadoSolicitudX on EstadoSolicitud {
@@ -23,32 +25,79 @@ class InterestRequest {
   final String coffeeLotId;
   final String? mensaje;
   final EstadoSolicitud estado;
-  final DateTime fecha;
+  final DateTime? fecha;
+  final DateTime? updatedAt;
 
-  InterestRequest({
+  // Copias de visualización tomadas al crear la solicitud (para mostrar la
+  // lista sin leer un documento por tarjeta). No son fuente de verdad.
+  final String compradorNombre;
+  final String? compradorCiudad;
+  final String? compradorTipo;
+  final String sellerNombre;
+  final String loteNombre;
+  final String? loteFoto;
+  final double? lotePrecioCOP;
+  final String? loteUnidad;
+
+  const InterestRequest({
     required this.id,
     required this.compradorId,
     required this.sellerId,
     required this.coffeeLotId,
     this.mensaje,
     this.estado = EstadoSolicitud.pendiente,
-    DateTime? fecha,
-  }) : fecha = fecha ?? DateTime.now();
+    this.fecha,
+    this.updatedAt,
+    this.compradorNombre = '',
+    this.compradorCiudad,
+    this.compradorTipo,
+    this.sellerNombre = '',
+    this.loteNombre = '',
+    this.loteFoto,
+    this.lotePrecioCOP,
+    this.loteUnidad,
+  });
 
-  /// El chat solo se habilita una vez la solicitud está aceptada; se usa
-  /// el propio id de la solicitud como id de sala de chat.
+  static String idPara(String compradorId, String coffeeLotId) => '${compradorId}_$coffeeLotId';
+
+  /// El chat existe solo para solicitudes aceptadas; su id es el de la solicitud.
   String get chatId => id;
   bool get esConexion => estado == EstadoSolicitud.aceptada;
 
-  InterestRequest copyWith({EstadoSolicitud? estado}) {
+  Map<String, dynamic> toCreateMap() => {
+        'compradorId': compradorId,
+        'sellerId': sellerId,
+        'coffeeLotId': coffeeLotId,
+        'mensaje': mensaje,
+        'estado': EstadoSolicitud.pendiente.name,
+        'compradorNombre': compradorNombre,
+        'compradorCiudad': compradorCiudad,
+        'compradorTipo': compradorTipo,
+        'sellerNombre': sellerNombre,
+        'loteNombre': loteNombre,
+        'loteFoto': loteFoto,
+        'lotePrecioCOP': lotePrecioCOP,
+        'loteUnidad': loteUnidad,
+      };
+
+  factory InterestRequest.fromMap(String id, Map<String, dynamic> m) {
     return InterestRequest(
       id: id,
-      compradorId: compradorId,
-      sellerId: sellerId,
-      coffeeLotId: coffeeLotId,
-      mensaje: mensaje,
-      estado: estado ?? this.estado,
-      fecha: fecha,
+      compradorId: readString(m['compradorId']) ?? '',
+      sellerId: readString(m['sellerId']) ?? '',
+      coffeeLotId: readString(m['coffeeLotId']) ?? '',
+      mensaje: readString(m['mensaje']),
+      estado: readEnum(EstadoSolicitud.values, m['estado'], EstadoSolicitud.pendiente),
+      fecha: readDate(m['createdAt']),
+      updatedAt: readDate(m['updatedAt']),
+      compradorNombre: readString(m['compradorNombre']) ?? '',
+      compradorCiudad: readString(m['compradorCiudad']),
+      compradorTipo: readString(m['compradorTipo']),
+      sellerNombre: readString(m['sellerNombre']) ?? '',
+      loteNombre: readString(m['loteNombre']) ?? '',
+      loteFoto: readString(m['loteFoto']),
+      lotePrecioCOP: readDouble(m['lotePrecioCOP']),
+      loteUnidad: readString(m['loteUnidad']),
     );
   }
 }

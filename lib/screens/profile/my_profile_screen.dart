@@ -1,12 +1,14 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import '../../data/mock_store.dart';
 import '../../models/app_user.dart';
-import '../../services/home_tab_notifier.dart';
-import '../../services/session_provider.dart';
+import '../../models/seller_profile.dart';
+import '../../state/activity_provider.dart';
+import '../../state/remote.dart';
+import '../../state/session_provider.dart';
+import '../../widgets/empty_state.dart' show RepoErrorView;
+import '../../widgets/remote_view.dart';
 import '../../theme/app_theme.dart';
 import '../../widgets/badges.dart';
-import '../auth/login_screen.dart';
 import '../seller/seller_profile_edit_screen.dart';
 
 /// Cuenta del usuario. El comprador puede definir preferencias de compra
@@ -23,8 +25,9 @@ class _MyProfileScreenState extends State<MyProfileScreen> {
   @override
   Widget build(BuildContext context) {
     final session = context.watch<SessionProvider>();
-    final store = context.watch<MockStore>();
-    final usuario = session.usuario!;
+    final actividad = context.watch<ActivityProvider>();
+    final usuario = session.usuario;
+    if (usuario == null) return const SizedBox.shrink();
 
     return Scaffold(
       appBar: AppBar(title: const Text('Mi cuenta')),
@@ -66,7 +69,7 @@ class _MyProfileScreenState extends State<MyProfileScreen> {
 
           if (session.esVendedor) ...[
             const SizedBox(height: 24),
-            _tarjetaVendedor(context, store, usuario),
+            _tarjetaVendedor(context, actividad.perfilVendedor, usuario),
           ] else ...[
             const SizedBox(height: 24),
             _seccion('Preferencias de compra'),
@@ -81,14 +84,9 @@ class _MyProfileScreenState extends State<MyProfileScreen> {
 
           const SizedBox(height: 32),
           OutlinedButton.icon(
-            onPressed: () {
-              context.read<SessionProvider>().cerrarSesion();
-              context.read<HomeTabNotifier>().reiniciar();
-              Navigator.of(context).pushAndRemoveUntil(
-                MaterialPageRoute(builder: (_) => const LoginScreen()),
-                (route) => false,
-              );
-            },
+            // Al cerrar sesión, el AuthGate vuelve al login y se vacían los
+            // datos del usuario (ActivityProvider).
+            onPressed: () => context.read<SessionProvider>().cerrarSesion(),
             icon: const Icon(Icons.logout, color: AppColors.danger),
             label: const Text('Cerrar sesión', style: TextStyle(color: AppColors.danger)),
             style: OutlinedButton.styleFrom(side: const BorderSide(color: AppColors.danger)),
@@ -98,8 +96,12 @@ class _MyProfileScreenState extends State<MyProfileScreen> {
     );
   }
 
-  Widget _tarjetaVendedor(BuildContext context, MockStore store, AppUser usuario) {
-    final perfil = store.obtenerPerfilVendedor(usuario.uid);
+  Widget _tarjetaVendedor(BuildContext context, Remote<SellerProfile?> remoto, AppUser usuario) {
+    if (remoto.cargando) return const Padding(padding: EdgeInsets.all(20), child: Center(child: CircularProgressIndicator()));
+    if (remoto.fallo) {
+      return RepoErrorView(error: remoto.error!, onReintentar: context.read<ActivityProvider>().reintentar);
+    }
+    final perfil = remoto.data;
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(16),
@@ -220,7 +222,9 @@ class _MyProfileScreenState extends State<MyProfileScreen> {
                   ),
                   const SizedBox(height: 20),
                   ElevatedButton(
-                    onPressed: () {
+                    onPressed: () async {
+                      final navigator = Navigator.of(context);
+                      final sesion = context.read<SessionProvider>();
                       final actualizado = usuario.copyWith(
                         preferencias: usuario.preferencias.copyWith(
                           variedades: variedades,
@@ -228,8 +232,12 @@ class _MyProfileScreenState extends State<MyProfileScreen> {
                           procesos: procesos,
                         ),
                       );
-                      context.read<SessionProvider>().actualizarUsuario(actualizado);
-                      Navigator.of(context).pop();
+                      try {
+                        await sesion.actualizarUsuario(actualizado);
+                        navigator.pop();
+                      } catch (e) {
+                        if (context.mounted) mostrarError(context, e);
+                      }
                     },
                     child: const Text('Guardar preferencias'),
                   ),

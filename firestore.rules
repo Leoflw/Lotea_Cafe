@@ -1,0 +1,369 @@
+rules_version = '2';
+
+// Lotea Café — reglas de seguridad de Cloud Firestore.
+//
+// Principios:
+//  - Nada es público: todo exige sesión iniciada (request.auth != null).
+//  - Cada persona solo lee y escribe lo suyo; el catálogo publicado es
+//    legible por cualquier usuario autenticado.
+//  - El rol (comprador/vendedor) se fija al crear el usuario y no cambia.
+//  - Los campos que el cliente no debe controlar (verificado, calificación,
+//    número de operaciones, fechas del servidor) se validan aquí.
+//  - Las transiciones de cotización repiten la tabla de QuoteStateMachine
+//    (lib/models/quote_request.dart): si cambias una, cambia la otra.
+//
+// Las reglas NO son filtros: las consultas del cliente incluyen las mismas
+// condiciones (p. ej. estado == 'publicado') para poder cumplirlas.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ---------- Funciones auxiliares ----------
+    function signedIn() {
+      return request.auth != null;
+    }
+    function uid() {
+      return request.auth.uid;
+    }
+    function incoming() {
+      return request.resource.data;
+    }
+    function roleOf(userId) {
+      return get(/databases/$(database)/documents/users/$(userId)).data.rol;
+    }
+    function isStr(v, minLen, maxLen) {
+      return v is string && v.size() >= minLen && v.size() <= maxLen;
+    }
+    function isStrOrNull(v, maxLen) {
+      return v == null || (v is string && v.size() <= maxLen);
+    }
+    function touchesOnly(keys) {
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly(keys);
+    }
+
+    // ---------- users/{uid} ----------
+    match /users/{userId} {
+      allow read: if signedIn() && uid() == userId;
+
+      allow create: if signedIn() && uid() == userId
+        && incoming().keys().hasOnly(['uid', 'email', 'rol', 'nombre', 'fotoPath', 'ciudad',
+                                      'tipoComprador', 'preferencias', 'onboardingCompleto',
+                                      'createdAt', 'updatedAt'])
+        && incoming().uid == userId
+        && incoming().email is string
+        && incoming().email.lower() == request.auth.token.email.lower()
+        && incoming().rol in ['comprador', 'vendedor']
+        && isStr(incoming().nombre, 1, 80)
+        && incoming().onboardingCompleto == false
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+
+      // El rol, el correo, el uid y createdAt no pueden cambiar.
+      allow update: if signedIn() && uid() == userId
+        && touchesOnly(['nombre', 'fotoPath', 'ciudad', 'tipoComprador', 'preferencias',
+                        'onboardingCompleto', 'updatedAt'])
+        && isStr(incoming().nombre, 1, 80)
+        && incoming().updatedAt == request.time;
+
+      allow delete: if false;
+
+      // ---------- favoritos: users/{uid}/favorites/{tipo}_{refId} ----------
+      match /favorites/{favId} {
+        allow read: if signedIn() && uid() == userId;
+        allow create: if signedIn() && uid() == userId
+          && incoming().keys().hasOnly(['tipo', 'refId', 'createdAt'])
+          && incoming().tipo in ['cafe', 'vendedor']
+          && isStr(incoming().refId, 1, 128)
+          && favId == incoming().tipo + '_' + incoming().refId
+          && incoming().createdAt == request.time;
+        allow update: if false;
+        allow delete: if signedIn() && uid() == userId;
+      }
+    }
+
+    // ---------- sellerProfiles/{uid} ----------
+    match /sellerProfiles/{sellerId} {
+      allow read: if signedIn();
+
+      allow create: if signedIn() && uid() == sellerId
+        && roleOf(uid()) == 'vendedor'
+        && incoming().keys().hasOnly(['usuarioId', 'nombreMarca', 'fincaPrincipal', 'fotoPrincipal',
+                                      'fotoPrincipalStoragePath', 'galeria', 'galeriaStoragePaths',
+                                      'descripcion', 'historia', 'aniosProduciendo', 'tipoProduccion',
+                                      'region', 'departamento', 'municipio', 'telefonoContacto',
+                                      'verificado', 'calificacionPromedio', 'numOperaciones',
+                                      'createdAt', 'updatedAt'])
+        && incoming().usuarioId == sellerId
+        && isStr(incoming().nombreMarca, 1, 80)
+        && isStr(incoming().fincaPrincipal, 1, 80)
+        && isStr(incoming().descripcion, 0, 1000)
+        && isStr(incoming().historia, 0, 3000)
+        && incoming().galeria.size() <= 12
+        && incoming().verificado == false
+        && incoming().calificacionPromedio == 0
+        && incoming().numOperaciones == 0
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+
+      // verificado, calificacionPromedio, numOperaciones y createdAt no se tocan desde la app.
+      allow update: if signedIn() && uid() == sellerId
+        && touchesOnly(['nombreMarca', 'fincaPrincipal', 'fotoPrincipal', 'fotoPrincipalStoragePath',
+                        'galeria', 'galeriaStoragePaths', 'descripcion', 'historia',
+                        'aniosProduciendo', 'tipoProduccion', 'region', 'departamento',
+                        'municipio', 'telefonoContacto', 'updatedAt'])
+        && isStr(incoming().nombreMarca, 1, 80)
+        && isStr(incoming().fincaPrincipal, 1, 80)
+        && isStr(incoming().descripcion, 0, 1000)
+        && isStr(incoming().historia, 0, 3000)
+        && incoming().galeria.size() <= 12
+        && incoming().updatedAt == request.time;
+
+      allow delete: if false;
+    }
+
+    // ---------- coffeeLots/{lotId} ----------
+    match /coffeeLots/{lotId} {
+      // Un lote publicado lo ve cualquier usuario autenticado; un borrador solo su dueño.
+      allow get: if signedIn()
+        && (resource == null || resource.data.estado == 'publicado' || resource.data.sellerId == uid());
+      allow list: if signedIn()
+        && (resource.data.estado == 'publicado' || resource.data.sellerId == uid());
+
+      allow create: if signedIn() && uid() == incoming().sellerId
+        && roleOf(uid()) == 'vendedor'
+        && exists(/databases/$(database)/documents/sellerProfiles/$(uid()))
+        && incoming().keys().hasOnly(['sellerId', 'nombre', 'variedades', 'proceso', 'tipoCafe',
+                                      'altitudMsnm', 'puntajeTaza', 'cosecha', 'perfilSensorial',
+                                      'descripcion', 'precioCOP', 'unidad', 'cantidadDisponibleKg',
+                                      'pedidoMinimoKg', 'disponible', 'metodosEnvio',
+                                      'certificaciones', 'fotos', 'fotosStoragePaths',
+                                      'sellerNombreMarca', 'departamento', 'region', 'municipio',
+                                      'vendedorVerificado', 'estado', 'fechaPublicacion',
+                                      'createdAt', 'updatedAt'])
+        && isStr(incoming().nombre, 1, 100)
+        && incoming().variedades is list && incoming().variedades.size() >= 1
+        && incoming().precioCOP is number && incoming().precioCOP > 0 && incoming().precioCOP <= 1000000000
+        && incoming().unidad in ['kg', 'lb', 'saco (70kg)']
+        && incoming().estado in ['borrador', 'publicado']
+        && incoming().fotos.size() <= 10
+        && isStr(incoming().descripcion, 0, 2000)
+        && incoming().vendedorVerificado == false
+        && (incoming().estado == 'publicado'
+              ? incoming().fechaPublicacion == request.time
+              : incoming().fechaPublicacion == null)
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+
+      allow update: if signedIn() && resource.data.sellerId == uid()
+        && touchesOnly(['nombre', 'variedades', 'proceso', 'tipoCafe', 'altitudMsnm', 'puntajeTaza',
+                        'cosecha', 'perfilSensorial', 'descripcion', 'precioCOP', 'unidad',
+                        'cantidadDisponibleKg', 'pedidoMinimoKg', 'disponible', 'metodosEnvio',
+                        'certificaciones', 'fotos', 'fotosStoragePaths', 'sellerNombreMarca',
+                        'departamento', 'region', 'municipio', 'estado', 'fechaPublicacion',
+                        'updatedAt'])
+        && isStr(incoming().nombre, 1, 100)
+        && incoming().variedades.size() >= 1
+        && incoming().precioCOP is number && incoming().precioCOP > 0 && incoming().precioCOP <= 1000000000
+        && incoming().unidad in ['kg', 'lb', 'saco (70kg)']
+        && incoming().estado in ['borrador', 'publicado']
+        && incoming().fotos.size() <= 10
+        && isStr(incoming().descripcion, 0, 2000)
+        // La fecha de publicación solo se escribe la primera vez que se publica.
+        && (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['fechaPublicacion'])
+              || (resource.data.fechaPublicacion == null && incoming().fechaPublicacion == request.time))
+        && incoming().updatedAt == request.time;
+
+      allow delete: if signedIn() && resource.data.sellerId == uid();
+    }
+
+    // ---------- interestRequests/{compradorId}_{coffeeLotId} ----------
+    match /interestRequests/{requestId} {
+      allow get: if signedIn()
+        && (resource == null || resource.data.compradorId == uid() || resource.data.sellerId == uid());
+      allow list: if signedIn()
+        && (resource.data.compradorId == uid() || resource.data.sellerId == uid());
+
+      // El comprador crea la solicitud sobre un lote publicado ajeno. El id
+      // determinista impide dos solicitudes activas para el mismo par.
+      allow create: if signedIn() && uid() == incoming().compradorId
+        && roleOf(uid()) == 'comprador'
+        && requestId == incoming().compradorId + '_' + incoming().coffeeLotId
+        && incoming().keys().hasOnly(['compradorId', 'sellerId', 'coffeeLotId', 'mensaje', 'estado',
+                                      'compradorNombre', 'compradorCiudad', 'compradorTipo',
+                                      'sellerNombre', 'loteNombre', 'loteFoto', 'lotePrecioCOP',
+                                      'loteUnidad', 'createdAt', 'updatedAt'])
+        && incoming().estado == 'pendiente'
+        && isStrOrNull(incoming().mensaje, 500)
+        && get(/databases/$(database)/documents/coffeeLots/$(incoming().coffeeLotId)).data.estado == 'publicado'
+        && get(/databases/$(database)/documents/coffeeLots/$(incoming().coffeeLotId)).data.sellerId == incoming().sellerId
+        && incoming().sellerId != uid()
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+
+      allow update: if signedIn() && incoming().updatedAt == request.time
+        && (
+          // El vendedor destinatario acepta o rechaza una solicitud pendiente.
+          (resource.data.sellerId == uid()
+            && resource.data.estado == 'pendiente'
+            && incoming().estado in ['aceptada', 'rechazada']
+            && touchesOnly(['estado', 'updatedAt']))
+          ||
+          // El comprador vuelve a solicitar tras un rechazo.
+          (resource.data.compradorId == uid()
+            && resource.data.estado == 'rechazada'
+            && incoming().estado == 'pendiente'
+            && isStrOrNull(incoming().mensaje, 500)
+            && touchesOnly(['estado', 'mensaje', 'updatedAt'])
+            && get(/databases/$(database)/documents/coffeeLots/$(resource.data.coffeeLotId)).data.estado == 'publicado')
+        );
+
+      allow delete: if false;
+    }
+
+    // ---------- chats/{connectionId}/messages/{messageId} ----------
+    // connectionId es el id de la solicitud aceptada.
+    match /chats/{chatId}/messages/{messageId} {
+      function conn() {
+        return get(/databases/$(database)/documents/interestRequests/$(chatId)).data;
+      }
+      function isParticipant() {
+        return conn().compradorId == uid() || conn().sellerId == uid();
+      }
+
+      allow read: if signedIn() && isParticipant() && conn().estado == 'aceptada';
+
+      allow create: if signedIn() && isParticipant() && conn().estado == 'aceptada'
+        && incoming().keys().hasOnly(['senderId', 'texto', 'createdAt'])
+        && incoming().senderId == uid()
+        && isStr(incoming().texto, 1, 2000)
+        && incoming().createdAt == request.time;
+
+      allow update, delete: if false;
+    }
+
+    // ---------- quotes/{quoteId} ----------
+    match /quotes/{quoteId} {
+      function inQuote() {
+        return resource.data.compradorId == uid() || resource.data.sellerId == uid();
+      }
+      function isBuyer() {
+        return resource.data.compradorId == uid();
+      }
+      function isSeller() {
+        return resource.data.sellerId == uid();
+      }
+      function state() {
+        return resource.data.estado;
+      }
+      function next() {
+        return incoming().estado;
+      }
+      function waitingSeller() {
+        return state() == 'solicitudPendiente' || state() == 'revisionSolicitada';
+      }
+
+      // Oferta del vendedor: importes en pesos enteros, coherentes con la cantidad.
+      function validOffer(o) {
+        return o is map
+          && o.keys().hasOnly(['precioUnitarioCOP', 'unidadPrecio', 'subtotalCOP', 'envioCOP', 'totalCOP',
+                               'tiempoEntrega', 'vigenciaHasta', 'condiciones', 'mensaje', 'version'])
+          && o.precioUnitarioCOP is int && o.precioUnitarioCOP > 0 && o.precioUnitarioCOP <= 100000000
+          && o.unidadPrecio == resource.data.unidad
+          && o.envioCOP is int && o.envioCOP >= 0 && o.envioCOP <= 100000000
+          && o.subtotalCOP is int
+          && math.abs(o.subtotalCOP - resource.data.cantidad * o.precioUnitarioCOP) <= 0.5
+          && o.totalCOP == o.subtotalCOP + o.envioCOP
+          && isStr(o.tiempoEntrega, 1, 80)
+          && (o.vigenciaHasta == null || (o.vigenciaHasta is timestamp && o.vigenciaHasta > request.time))
+          && isStr(o.condiciones, 0, 800)
+          && isStrOrNull(o.mensaje, 500)
+          && o.version == (resource.data.oferta == null ? 1 : resource.data.oferta.version + 1);
+      }
+
+      allow get: if signedIn() && (resource == null || inQuote());
+      allow list: if signedIn() && inQuote();
+
+      // El comprador crea la solicitud dentro de una conexión aceptada que le pertenece.
+      allow create: if signedIn() && uid() == incoming().compradorId
+        && roleOf(uid()) == 'comprador'
+        && incoming().keys().hasOnly(['interestRequestId', 'compradorId', 'sellerId', 'coffeeLotId',
+                                      'cantidad', 'unidad', 'comentario', 'lugarEntrega', 'estado',
+                                      'oferta', 'revisionComentario', 'compradorNombre',
+                                      'sellerNombre', 'loteNombre', 'loteFoto', 'createdAt',
+                                      'updatedAt'])
+        && get(/databases/$(database)/documents/interestRequests/$(incoming().interestRequestId)).data.estado == 'aceptada'
+        && get(/databases/$(database)/documents/interestRequests/$(incoming().interestRequestId)).data.compradorId == uid()
+        && get(/databases/$(database)/documents/interestRequests/$(incoming().interestRequestId)).data.sellerId == incoming().sellerId
+        && get(/databases/$(database)/documents/interestRequests/$(incoming().interestRequestId)).data.coffeeLotId == incoming().coffeeLotId
+        && incoming().cantidad is number && incoming().cantidad > 0 && incoming().cantidad <= 1000000
+        && incoming().unidad in ['kg', 'lb', 'saco (70kg)']
+        && incoming().estado == 'solicitudPendiente'
+        && incoming().oferta == null
+        && incoming().revisionComentario == null
+        && isStrOrNull(incoming().lugarEntrega, 120)
+        && isStrOrNull(incoming().comentario, 500)
+        && incoming().createdAt == request.time
+        && incoming().updatedAt == request.time;
+
+      // Transiciones (misma tabla que QuoteStateMachine). Siempre cambia updatedAt.
+      allow update: if signedIn() && inQuote() && incoming().updatedAt == request.time
+        && (
+          // Vendedor → envía oferta (o la reenvía tras una revisión)
+          (isSeller() && waitingSeller() && next() == 'ofertaEnviada'
+            && touchesOnly(['estado', 'oferta', 'revisionComentario', 'updatedAt'])
+            && validOffer(incoming().oferta))
+          ||
+          // Vendedor → rechaza la solicitud
+          (isSeller() && waitingSeller() && next() == 'solicitudRechazada'
+            && touchesOnly(['estado', 'updatedAt']))
+          ||
+          // Comprador → acepta una oferta vigente
+          (isBuyer() && state() == 'ofertaEnviada' && next() == 'ofertaAceptada'
+            && touchesOnly(['estado', 'updatedAt'])
+            && resource.data.oferta != null
+            && (resource.data.oferta.vigenciaHasta == null || resource.data.oferta.vigenciaHasta > request.time))
+          ||
+          // Comprador → rechaza la oferta
+          (isBuyer() && state() == 'ofertaEnviada' && next() == 'ofertaRechazada'
+            && touchesOnly(['estado', 'updatedAt']))
+          ||
+          // Comprador → pide ajuste
+          (isBuyer() && state() == 'ofertaEnviada' && next() == 'revisionSolicitada'
+            && touchesOnly(['estado', 'revisionComentario', 'updatedAt'])
+            && isStr(incoming().revisionComentario, 1, 500))
+          ||
+          // Comprador → cancela mientras la negociación sigue abierta
+          (isBuyer() && (state() == 'ofertaEnviada' || waitingSeller()) && next() == 'cancelada'
+            && touchesOnly(['estado', 'updatedAt']))
+        );
+
+      allow delete: if false;
+
+      // ---------- Historial: quotes/{quoteId}/events/{eventId} ----------
+      match /events/{eventId} {
+        // getAfter(): el evento se escribe en la MISMA transacción que la
+        // cotización, así que debe validarse contra el estado posterior.
+        function parentAfter() {
+          return getAfter(/databases/$(database)/documents/quotes/$(quoteId)).data;
+        }
+
+        allow read: if signedIn()
+          && (get(/databases/$(database)/documents/quotes/$(quoteId)).data.compradorId == uid()
+              || get(/databases/$(database)/documents/quotes/$(quoteId)).data.sellerId == uid());
+
+        allow create: if signedIn()
+          && (parentAfter().compradorId == uid() || parentAfter().sellerId == uid())
+          && incoming().keys().hasOnly(['tipo', 'actor', 'actorId', 'fecha', 'nota', 'totalCOP', 'versionOferta'])
+          && incoming().actorId == uid()
+          && incoming().actor == (parentAfter().compradorId == uid() ? 'comprador' : 'vendedor')
+          && incoming().tipo in ['solicitudCreada', 'ofertaEnviada', 'revisionSolicitada', 'ofertaAceptada',
+                                 'ofertaRechazada', 'solicitudRechazada', 'cancelada']
+          && isStrOrNull(incoming().nota, 500)
+          && incoming().fecha == request.time;
+
+        allow update, delete: if false;
+      }
+    }
+
+    // Todo lo demás: denegado por omisión.
+  }
+}

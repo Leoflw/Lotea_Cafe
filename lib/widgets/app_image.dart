@@ -4,7 +4,7 @@ import '../utils/image_source.dart';
 import 'fullscreen_image_viewer.dart';
 
 /// Componente de imagen único para toda la app: centraliza la carga (asset,
-/// archivo local o remota, según [imageProviderFor]), el placeholder, el
+/// archivo local o remota de ImageKit, según [imageProviderFor]), el placeholder, el
 /// manejo de error, los bordes y el BoxFit. Si [ampliable] es true y hay
 /// imágenes, al tocarla abre [FullscreenImageViewer] posicionado en
 /// [indiceEnGaleria] de [galeria].
@@ -42,9 +42,14 @@ class AppImage extends StatelessWidget {
     final tieneImagen = path != null && path!.isNotEmpty;
     final imagenes = galeria ?? (tieneImagen ? [path!] : const <String>[]);
 
+    // Para fotos de ImageKit se pide el tamaño que realmente se pinta (según
+    // el ancho del widget y la densidad de pantalla). Sin ancho fijo (tarjetas
+    // que ocupan todo el espacio) se pide un ancho estándar de 720 px.
+    final dpr = MediaQuery.devicePixelRatioOf(context);
+    final anchoPx = (width != null && width!.isFinite) ? (width! * dpr).ceil() : 720;
     final contenido = tieneImagen
         ? Image(
-            image: imageProviderFor(path!),
+            image: imageProviderFor(path!, anchoPx: anchoPx),
             width: width,
             height: height,
             fit: fit,

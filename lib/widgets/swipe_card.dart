@@ -1,9 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import '../data/mock_store.dart';
 import '../models/coffee_lot.dart';
-import '../models/seller_profile.dart';
-import '../services/session_provider.dart';
+import '../state/session_provider.dart';
+import '../utils/catalog_logic.dart';
 import '../theme/app_theme.dart';
 import '../utils/format_utils.dart';
 import 'app_image.dart';
@@ -22,7 +21,6 @@ import 'badges.dart';
 /// Nunca dispara "Me interesa".
 class SwipeCard extends StatelessWidget {
   final CoffeeLot lote;
-  final SellerProfile? vendedor;
   final VoidCallback onVerPerfil;
 
   /// Pista discreta "Desliza"; el padre la oculta tras unas interacciones.
@@ -31,7 +29,6 @@ class SwipeCard extends StatelessWidget {
   const SwipeCard({
     super.key,
     required this.lote,
-    required this.vendedor,
     required this.onVerPerfil,
     this.mostrarPista = false,
   });
@@ -39,12 +36,12 @@ class SwipeCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final usuario = context.read<SessionProvider>().usuario;
-    final coincide = usuario != null && context.read<MockStore>().coincideConPreferencias(lote, usuario);
-    final origen = vendedor?.departamento ?? '';
+    final coincide = usuario != null && CatalogLogic.coincideConPreferencias(lote, usuario);
+    final origen = lote.departamento;
 
     return Semantics(
       button: true,
-      label: 'Ver perfil de ${vendedor?.nombreMarca ?? lote.nombre}, ${lote.nombre}',
+      label: 'Ver perfil de ${lote.sellerNombreMarca.isEmpty ? lote.nombre : lote.sellerNombreMarca}, ${lote.nombre}',
       child: Material(
         color: Colors.white,
         elevation: 3,
@@ -80,7 +77,7 @@ class SwipeCard extends StatelessWidget {
                                   spacing: 6,
                                   runSpacing: 6,
                                   children: [
-                                    if (vendedor?.verificado == true) const VerifiedBadge(compacto: true),
+                                    if (lote.vendedorVerificado) const VerifiedBadge(compacto: true),
                                     if (coincide) const _EtiquetaPreferencias(),
                                   ],
                                 ),
@@ -101,16 +98,6 @@ class SwipeCard extends StatelessWidget {
                             ],
                           ),
                         ),
-                        if ((vendedor?.calificacionPromedio ?? 0) > 0)
-                          Positioned(
-                            bottom: 10,
-                            right: 12,
-                            child: Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                              decoration: BoxDecoration(color: Colors.black.withOpacity(0.45), borderRadius: BorderRadius.circular(20)),
-                              child: RatingBadge(calificacion: vendedor!.calificacionPromedio),
-                            ),
-                          ),
                       ],
                     ),
                   ),
@@ -133,7 +120,7 @@ class SwipeCard extends StatelessWidget {
                               ),
                               const SizedBox(height: 2),
                               Text(
-                                vendedor?.nombreMarca ?? '',
+                                lote.sellerNombreMarca,
                                 maxLines: 1,
                                 overflow: TextOverflow.ellipsis,
                                 style: TextStyle(fontSize: 13.5, color: Colors.grey.shade800),

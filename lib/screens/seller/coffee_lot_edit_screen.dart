@@ -1,10 +1,18 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:provider/provider.dart';
-import '../../data/mock_store.dart';
 import '../../models/coffee_lot.dart';
+import '../../repositories/coffee_lot_repository.dart';
+import '../../repositories/image_repository.dart';
+import '../../repositories/repo_exception.dart';
+import '../../services/photo_sync.dart';
+import '../../state/activity_provider.dart';
+import '../../widgets/remote_view.dart' show mostrarError;
 import '../../theme/app_theme.dart';
 import '../../utils/focus_utils.dart';
+import '../../utils/image_validation.dart';
+import '../../utils/lot_publish_policy.dart';
 import '../../widgets/dismiss_keyboard.dart';
 import '../../widgets/app_image.dart';
 
@@ -41,6 +49,11 @@ class _CoffeeLotEditScreenState extends State<CoffeeLotEditScreen> {
   final List<String> _certificacionesSel = [];
   final List<String> _metodosEnvioSel = [];
   final List<String> _fotos = [];
+  final Map<String, String> _idsPorUrl = {}; // URL ya subida → fileId de ImageKit
+  final Set<String> _fallidas = {}; // fotos locales cuya subida falló (siguen en _fotos)
+  late String? _loteId = widget.loteExistente?.id; // se fija al guardar un borrador nuevo
+  bool _guardando = false;
+  String? _progreso;
   final List<String> _notasCataSel = [];
   String? _acidezSel;
   String? _cuerpoSel;
@@ -74,6 +87,9 @@ class _CoffeeLotEditScreenState extends State<CoffeeLotEditScreen> {
       _certificacionesSel.addAll(l.certificaciones);
       _metodosEnvioSel.addAll(l.metodosEnvio);
       _fotos.addAll(l.fotos);
+      for (var i = 0; i < l.fotos.length && i < l.fotosStoragePaths.length; i++) {
+        _idsPorUrl[l.fotos[i]] = l.fotosStoragePaths[i];
+      }
       _notasCataSel.addAll(l.perfilSensorial.notas);
       _acidezSel = l.perfilSensorial.acidez;
       _cuerpoSel = l.perfilSensorial.cuerpo;
@@ -95,57 +111,185 @@ class _CoffeeLotEditScreenState extends State<CoffeeLotEditScreen> {
     super.dispose();
   }
 
+  static const _maxFotos = 10; // mismo límite que firestore.rules
+
+  /// Reduce y comprime cada foto al elegirla (lado máximo 1600 px, calidad
+  /// 80) y valida tipo y tamaño antes de aceptarla en el formulario.
   Future<void> _agregarFotos() async {
-    final archivos = await _picker.pickMultiImage(imageQuality: 80);
-    if (archivos.isNotEmpty) setState(() => _fotos.addAll(archivos.map((x) => x.path)));
+    final archivos = await _picker.pickMultiImage(
+      imageQuality: ImageValidation.pickerQuality,
+      maxWidth: ImageValidation.pickerMaxSide,
+      maxHeight: ImageValidation.pickerMaxSide,
+    );
+    if (archivos.isEmpty) return;
+    final aceptadas = <String>[];
+    var rechazadas = 0;
+    String? motivo;
+    for (final x in archivos) {
+      if (_fotos.length + aceptadas.length >= _maxFotos) {
+        motivo = 'Máximo $_maxFotos fotos por café.';
+        break;
+      }
+      try {
+        ImageValidation.validar(await File(x.path).readAsBytes());
+        aceptadas.add(x.path);
+      } on RepoException catch (e) {
+        rechazadas++;
+        motivo = e.mensaje;
+      } on FileSystemException {
+        rechazadas++;
+        motivo = 'No se pudo leer una de las imágenes.';
+      }
+    }
+    if (!mounted) return;
+    if (aceptadas.isNotEmpty) setState(() => _fotos.addAll(aceptadas));
+    if (motivo != null) {
+      _error(rechazadas > 1 ? '$rechazadas imágenes no se agregaron. $motivo' : motivo);
+    }
   }
 
-  void _guardar({required bool publicar}) {
-    if (!_formKey.currentState!.validate()) return;
+  Future<void> _guardar({required bool publicar}) async {
+    if (_guardando || !_formKey.currentState!.validate()) return;
     if (_variedadesSel.isEmpty) {
       _error('Selecciona al menos una variedad.');
       return;
     }
+    // Publicar exige foto; guardar un borrador no.
+    final sinFotos = LotPublishPolicy.motivoBloqueo(publicar: publicar, fotosSubidas: _fotos.length, fotosFallidas: 0);
+    if (sinFotos != null) {
+      _error(sinFotos);
+      return;
+    }
+    final perfil = context.read<ActivityProvider>().perfilVendedor;
+    if (!perfil.listo || perfil.data == null) {
+      _error('Primero completa el perfil de tu marca.');
+      return;
+    }
+    final marca = perfil.data!;
+    final repoLotes = context.read<CoffeeLotRepository>();
+    final repoImagenes = context.read<ImageRepository>();
+    final navigator = Navigator.of(context);
+    final messenger = ScaffoldMessenger.of(context);
 
-    final store = context.read<MockStore>();
-    final lote = CoffeeLot(
-      id: widget.loteExistente?.id ?? DateTime.now().microsecondsSinceEpoch.toString(),
-      sellerId: widget.sellerId,
-      nombre: _nombreCtrl.text.trim(),
-      variedades: List.from(_variedadesSel),
-      proceso: _procesoSel,
-      tipoCafe: _tipoCafeSel,
-      altitudMsnm: double.tryParse(_altitudCtrl.text.trim()),
-      puntajeTaza: double.tryParse(_puntajeCtrl.text.trim()),
-      cosecha: _cosechaCtrl.text.trim().isEmpty ? null : _cosechaCtrl.text.trim(),
-      perfilSensorial: TasteProfile(
-        notas: List.from(_notasCataSel),
-        acidez: _acidezSel,
-        cuerpo: _cuerpoSel,
-        dulzor: _dulzorSel,
-      ),
-      descripcion: _descripcionCtrl.text.trim(),
-      precioCOP: double.tryParse(_precioCtrl.text.trim()) ?? 0,
-      unidad: _unidadSel,
-      cantidadDisponibleKg: double.tryParse(_cantidadCtrl.text.trim()),
-      pedidoMinimoKg: double.tryParse(_pedidoMinCtrl.text.trim()),
-      disponible: _disponible,
-      metodosEnvio: List.from(_metodosEnvioSel),
-      certificaciones: List.from(_certificacionesSel),
-      fotos: List.from(_fotos),
-      estado: publicar ? EstadoLote.publicado : EstadoLote.borrador,
-      fechaPublicacion: widget.loteExistente?.fechaPublicacion,
-    );
+    setState(() {
+      _guardando = true;
+      _progreso = null;
+    });
+    try {
+      // 1) Subir a ImageKit solo las fotos nuevas. Cada foto subida cambia su
+      //    ruta local por la URL en el formulario, así un reintento no la
+      //    repite. En un borrador, una foto fallida no impide guardar.
+      final fotos = await PhotoSync.sincronizar(
+        repo: repoImagenes,
+        proposito: ImagePurpose.lot,
+        fotos: _fotos,
+        idsPorUrl: _idsPorUrl,
+        continuarSiFalla: !publicar,
+        alSubir: (local, url) {
+          if (!mounted) return;
+          setState(() {
+            final i = _fotos.indexOf(local);
+            if (i >= 0) _fotos[i] = url;
+            _fallidas.remove(local);
+          });
+        },
+        alProgresar: (h, t, p) {
+          if (mounted && t > 0) setState(() => _progreso = 'Subiendo foto ${h + 1} de $t… ${(p * 100).round()}%');
+        },
+      );
+      if (mounted) {
+        setState(() {
+          _fallidas
+            ..clear()
+            ..addAll(fotos.fallidas.map((f) => f.ruta));
+        });
+      }
 
-    store.guardarLote(lote);
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(publicar ? 'Café publicado en el catálogo.' : 'Borrador guardado.'),
-        backgroundColor: AppColors.leafGreen,
-      ),
-    );
-    liberarFoco();
-    Navigator.of(context).pop();
+      // Nunca se publica con fotos pendientes ni sin ninguna foto subida.
+      final bloqueo = LotPublishPolicy.motivoBloqueo(
+        publicar: publicar,
+        fotosSubidas: fotos.urls.length,
+        fotosFallidas: fotos.fallidas.length,
+      );
+      if (bloqueo != null) {
+        if (mounted) _error(bloqueo);
+        return;
+      }
+      if (mounted) setState(() => _progreso = 'Guardando café…');
+
+      // 2) Guardar el lote con URLs remotas y datos del vendedor copiados. Solo
+      //    las fotos subidas llegan a `fotos`: un lote con subida fallida no
+      //    queda marcado como si tuviera foto.
+      final lote = CoffeeLot(
+        id: _loteId ?? '',
+        sellerId: widget.sellerId,
+        nombre: _nombreCtrl.text.trim(),
+        variedades: List.from(_variedadesSel),
+        proceso: _procesoSel,
+        tipoCafe: _tipoCafeSel,
+        altitudMsnm: double.tryParse(_altitudCtrl.text.trim()),
+        puntajeTaza: double.tryParse(_puntajeCtrl.text.trim()),
+        cosecha: _cosechaCtrl.text.trim().isEmpty ? null : _cosechaCtrl.text.trim(),
+        perfilSensorial: TasteProfile(
+          notas: List.from(_notasCataSel),
+          acidez: _acidezSel,
+          cuerpo: _cuerpoSel,
+          dulzor: _dulzorSel,
+        ),
+        descripcion: _descripcionCtrl.text.trim(),
+        precioCOP: double.tryParse(_precioCtrl.text.trim()) ?? 0,
+        unidad: _unidadSel,
+        cantidadDisponibleKg: double.tryParse(_cantidadCtrl.text.trim()),
+        pedidoMinimoKg: double.tryParse(_pedidoMinCtrl.text.trim()),
+        disponible: _disponible,
+        metodosEnvio: List.from(_metodosEnvioSel),
+        certificaciones: List.from(_certificacionesSel),
+        fotos: fotos.urls,
+        fotosStoragePaths: fotos.fileIds,
+        sellerNombreMarca: marca.nombreMarca,
+        departamento: marca.departamento,
+        region: marca.region,
+        municipio: marca.municipio,
+        estado: publicar ? EstadoLote.publicado : EstadoLote.borrador,
+      );
+      _loteId = await repoLotes.guardarLote(lote, idExistente: _loteId);
+
+      if (fotos.fallidas.isNotEmpty) {
+        // Borrador guardado sin las fotos fallidas: la pantalla se queda abierta
+        // (con esas fotos marcadas) para reintentar sin perder lo escrito.
+        final n = fotos.fallidas.length;
+        messenger
+          ..hideCurrentSnackBar()
+          ..showSnackBar(SnackBar(
+            content: Text(n == 1
+                ? 'Borrador guardado, pero 1 foto no se pudo subir.'
+                : 'Borrador guardado, pero $n fotos no se pudieron subir.'),
+            backgroundColor: AppColors.danger,
+            duration: const Duration(seconds: 8),
+            action: SnackBarAction(label: 'Reintentar', textColor: Colors.white, onPressed: () => _guardar(publicar: false)),
+          ));
+        return;
+      }
+
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text(publicar ? 'Café publicado en el catálogo.' : 'Borrador guardado.'),
+          backgroundColor: AppColors.leafGreen,
+        ),
+      );
+      liberarFoco();
+      navigator.pop();
+    } on RepoException catch (e) {
+      // El formulario conserva lo escrito y lo ya subido; se puede reintentar.
+      if (mounted) mostrarError(context, e, onReintentar: () => _guardar(publicar: publicar));
+    } finally {
+      if (mounted) {
+        setState(() {
+          _guardando = false;
+          _progreso = null;
+        });
+      }
+    }
   }
 
   void _error(String msg) {
@@ -362,10 +506,21 @@ class _CoffeeLotEditScreenState extends State<CoffeeLotEditScreen> {
             _label('Certificaciones'),
             _chips(certificacionesDisponibles, _certificacionesSel),
             const SizedBox(height: 32),
-            ElevatedButton(onPressed: () => _guardar(publicar: true), child: const Text('Publicar café')),
+            if (_progreso != null) ...[
+              const LinearProgressIndicator(color: AppColors.coffeeMedium),
+              const SizedBox(height: 6),
+              Text(_progreso!, style: TextStyle(color: Colors.grey.shade700, fontSize: 12.5)),
+              const SizedBox(height: 10),
+            ],
+            ElevatedButton(
+              onPressed: _guardando ? null : () => _guardar(publicar: true),
+              child: _guardando
+                  ? const SizedBox(width: 22, height: 22, child: CircularProgressIndicator(strokeWidth: 2.4, color: Colors.white))
+                  : const Text('Publicar café'),
+            ),
             const SizedBox(height: 10),
             OutlinedButton(
-              onPressed: () => _guardar(publicar: false),
+              onPressed: _guardando ? null : () => _guardar(publicar: false),
               child: const Text('Guardar como borrador'),
             ),
             const SizedBox(height: 20),
@@ -462,6 +617,16 @@ class _CoffeeLotEditScreenState extends State<CoffeeLotEditScreen> {
                 clipBehavior: Clip.none,
                 children: [
                   AppImage(path: ruta, galeria: _fotos, indiceEnGaleria: i, width: 90, height: 90, borderRadius: BorderRadius.circular(12)),
+                  if (_fallidas.contains(ruta))
+                    Positioned(
+                      left: 4,
+                      bottom: 4,
+                      child: Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                        decoration: BoxDecoration(color: AppColors.danger, borderRadius: BorderRadius.circular(8)),
+                        child: const Text('No subida', style: TextStyle(color: Colors.white, fontSize: 9.5, fontWeight: FontWeight.bold)),
+                      ),
+                    ),
                   Positioned(
                     top: -6,
                     right: -6,

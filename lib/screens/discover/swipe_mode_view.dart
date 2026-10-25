@@ -1,9 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_card_swiper/flutter_card_swiper.dart';
 import 'package:provider/provider.dart';
-import '../../data/mock_store.dart';
 import '../../models/coffee_lot.dart';
-import '../../services/session_provider.dart';
+import '../../state/activity_provider.dart';
 import '../../theme/app_theme.dart';
 import '../../widgets/empty_state.dart';
 import '../../widgets/interest_dialog.dart';
@@ -50,9 +49,8 @@ class _SwipeModeViewState extends State<SwipeModeView> {
   }
 
   void _descartar(int index) {
-    final store = context.read<MockStore>();
-    final uid = context.read<SessionProvider>().usuario!.uid;
-    store.descartarLote(compradorId: uid, coffeeLotId: widget.lotes[index].id);
+    final actividad = context.read<ActivityProvider>();
+    actividad.descartar(widget.lotes[index].id);
 
     ScaffoldMessenger.of(context).hideCurrentSnackBar();
     ScaffoldMessenger.of(context).showSnackBar(
@@ -62,7 +60,7 @@ class _SwipeModeViewState extends State<SwipeModeView> {
         action: SnackBarAction(
           label: 'Deshacer',
           onPressed: () {
-            store.deshacerUltimoDescarte(uid);
+            actividad.deshacerUltimoDescarte();
             _controller.undo(); // devuelve también la tarjeta al mazo
           },
         ),
@@ -71,8 +69,7 @@ class _SwipeModeViewState extends State<SwipeModeView> {
   }
 
   Future<void> _meInteresa(int index) async {
-    final uid = context.read<SessionProvider>().usuario!.uid;
-    final enviada = await mostrarDialogoInteres(context: context, lote: widget.lotes[index], compradorId: uid);
+    final enviada = await mostrarDialogoInteres(context: context, lote: widget.lotes[index]);
     // Si canceló (o ya existía), la tarjeta vuelve al mazo: no se pierde un café sin decidir.
     if (!enviada && mounted) _controller.undo();
   }
@@ -116,10 +113,8 @@ class _SwipeModeViewState extends State<SwipeModeView> {
               },
               cardBuilder: (context, index, _, __) {
                 final lote = widget.lotes[index];
-                final vendedor = context.read<MockStore>().perfilVendedorPorId(lote.sellerId);
                 return SwipeCard(
                   lote: lote,
-                  vendedor: vendedor,
                   mostrarPista: _mostrarPista && index == 0,
                   onVerPerfil: () => _abrirPerfil(lote),
                 );

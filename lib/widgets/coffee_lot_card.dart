@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import '../data/mock_store.dart';
 import '../models/coffee_lot.dart';
-import '../services/session_provider.dart';
+import '../state/session_provider.dart';
+import '../utils/catalog_logic.dart';
 import '../theme/app_theme.dart';
 import '../utils/format_utils.dart';
 import 'app_image.dart';
@@ -22,12 +22,10 @@ class CoffeeLotCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final store = context.read<MockStore>();
-    final vendedor = store.perfilVendedorPorId(lote.sellerId);
     final session = context.read<SessionProvider>();
     final destacado = session.usuario != null &&
         !session.esVendedor &&
-        store.coincideConPreferencias(lote, session.usuario!);
+        CatalogLogic.coincideConPreferencias(lote, session.usuario!);
 
     return Card(
       margin: const EdgeInsets.only(bottom: 12),
@@ -77,7 +75,7 @@ class CoffeeLotCard extends StatelessWidget {
                                 overflow: TextOverflow.ellipsis,
                               ),
                             ),
-                            if (vendedor?.verificado == true)
+                            if (lote.vendedorVerificado)
                               const Padding(
                                 padding: EdgeInsets.only(left: 4),
                                 child: Icon(Icons.verified, size: 15, color: AppColors.leafGreen),
@@ -86,7 +84,7 @@ class CoffeeLotCard extends StatelessWidget {
                         ),
                         const SizedBox(height: 2),
                         Text(
-                          vendedor != null ? '${vendedor.nombreMarca} · ${vendedor.departamento}' : lote.varietyPrincipal,
+                          lote.sellerNombreMarca.isNotEmpty ? '${lote.sellerNombreMarca} · ${lote.departamento}' : lote.varietyPrincipal,
                           style: TextStyle(color: Colors.grey.shade600, fontSize: 12),
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,

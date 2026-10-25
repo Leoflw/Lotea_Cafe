@@ -1,0 +1,17 @@
+# Cloudflare Worker de autorización de subidas a ImageKit — Lotea Café.
+# Plan gratuito de Workers: no necesita KV, R2, D1 ni Durable Objects.
+name = "imagekit-upload-auth"
+main = "src/index.js"
+compatibility_date = "2025-09-01"
+workers_dev = true
+
+# Variables PÚBLICAS (se pueden versionar). La clave PRIVADA de ImageKit NO va
+# aquí: se guarda como secreto con `npx wrangler secret put IMAGEKIT_PRIVATE_KEY`
+# o desde el panel de Cloudflare (Settings → Variables and Secrets → Secret).
+[vars]
+# ID del proyecto de Firebase (.firebaserc). El Worker solo acepta tokens de ESTE proyecto.
+FIREBASE_PROJECT_ID = "lotea-cafe"
+# Public key de ImageKit (Developer options → API keys). Valor de EJEMPLO: reemplázalo.
+IMAGEKIT_PUBLIC_KEY = "public_/j57TH0m2snmSUmMbiI03HuoExM="
+# Carpeta raíz en ImageKit. Cada foto va en {raíz}/users/{uid}/{lots|profile}.
+IMAGEKIT_FOLDER_ROOT = "/lotea-cafe"

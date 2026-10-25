@@ -1,9 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import '../../data/mock_store.dart';
-import '../../models/interest_request.dart';
 import '../../models/seller_profile.dart';
-import '../../services/session_provider.dart';
+import '../../state/activity_provider.dart';
 import '../../theme/app_theme.dart';
 import '../../widgets/coffee_lot_card.dart';
 import '../../widgets/empty_state.dart';
@@ -18,14 +16,19 @@ class MyCoffeeLotsScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final store = context.watch<MockStore>();
-    final usuario = context.read<SessionProvider>().usuario!;
-    final perfil = store.obtenerPerfilVendedor(usuario.uid);
-    final sellerId = perfil?.id ?? usuario.uid;
-    final lotes = store.lotesDeVendedor(sellerId);
-    final publicados = lotes.where((l) => l.publicado).length;
-    final pendientes = store.solicitudesRecibidas(sellerId).where((s) => s.estado == EstadoSolicitud.pendiente).length;
-    final conexiones = store.conexionesVendedor(sellerId).length;
+    final a = context.watch<ActivityProvider>();
+    if (a.perfilVendedor.cargando || a.lotesPropios.cargando) {
+      return Scaffold(appBar: AppBar(title: const Text('Mi catálogo')), body: const Center(child: CircularProgressIndicator()));
+    }
+    if (a.perfilVendedor.fallo || a.lotesPropios.fallo) {
+      final e = (a.perfilVendedor.error ?? a.lotesPropios.error)!;
+      return Scaffold(appBar: AppBar(title: const Text('Mi catálogo')), body: RepoErrorView(error: e, onReintentar: a.reintentar));
+    }
+    final perfil = a.perfilVendedor.data;
+    final lotes = a.listaLotesPropios;
+    final publicados = a.lotesPublicados;
+    final pendientes = a.pendientes.length;
+    final conexiones = a.conexiones.length;
 
     return Scaffold(
       appBar: AppBar(

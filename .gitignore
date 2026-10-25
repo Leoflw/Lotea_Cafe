@@ -1,0 +1,44 @@
+# Archivos generados por Flutter y Android
+.flutter-plugins-dependencies
+android/.kotlin/
+ios/Pods/
+ios/Flutter/Generated.xcconfig
+ios/Flutter/ephemeral/
+
+# Variables locales y secretos
+.env
+.env.*
+**/.dev.vars
+**/.wrangler/
+
+# Credenciales privadas y certificados
+*.pem
+*.p12
+*.pfx
+*serviceAccount*.json
+
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+build/
+.idea/
+*.iml
+.DS_Store
+android/local.properties
+ios/Flutter/Flutter.podspec
+
+# Firebase / secretos locales (no versionar)
+ios/Runner/GoogleService-Info.plist
+.firebase/
+firebase-debug.log
+*.keystore
+*.jks
+key.properties
+
+# Valores locales de ImageKit para --dart-define-from-file (son públicos, pero propios de cada entorno)
+env.json
+# Cloudflare Worker: secretos locales y dependencias
+cloudflare/imagekit-upload-auth/.dev.vars
+cloudflare/imagekit-upload-auth/node_modules/
+cloudflare/imagekit-upload-auth/.wrangler/

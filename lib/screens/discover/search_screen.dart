@@ -1,8 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import '../../data/mock_store.dart';
+import '../../models/discover_filters.dart';
+import '../../utils/catalog_logic.dart';
 import '../../models/coffee_lot.dart';
-import '../../services/session_provider.dart';
+import '../../state/session_provider.dart';
 import '../../theme/app_theme.dart';
 import '../../utils/focus_utils.dart';
 import '../../widgets/coffee_lot_card.dart';
@@ -22,9 +23,10 @@ import '../seller/seller_detail_screen.dart';
 /// recarga una sola vez.
 class SearchScreen extends StatefulWidget {
   final DiscoverFilters filtrosBase;
+  final List<CoffeeLot> lotesBase;
   final ValueChanged<String> onQueryChanged;
 
-  const SearchScreen({super.key, required this.filtrosBase, required this.onQueryChanged});
+  const SearchScreen({super.key, required this.filtrosBase, required this.lotesBase, required this.onQueryChanged});
 
   @override
   State<SearchScreen> createState() => _SearchScreenState();
@@ -52,9 +54,9 @@ class _SearchScreenState extends State<SearchScreen> {
   String get _query => _ctrl.text.trim();
 
   List<CoffeeLot> _resultados(BuildContext context) {
-    final store = context.read<MockStore>();
-    final uid = context.read<SessionProvider>().usuario!.uid;
-    return store.descubrirLotes(compradorId: uid, filtros: widget.filtrosBase.copyWith(busqueda: _query));
+    final filtros = widget.filtrosBase.copyWith(busqueda: _query);
+    final res = widget.lotesBase.where((l) => CatalogLogic.coincide(l, filtros)).toList();
+    return CatalogLogic.ordenar(res, filtros.orden, context.read<SessionProvider>().usuario);
   }
 
   void _cambio(String texto) {

@@ -1,8 +1,10 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import '../data/mock_store.dart';
 import '../models/coffee_lot.dart';
+import '../repositories/interest_request_repository.dart';
+import '../repositories/repo_exception.dart';
 import '../services/home_tab_notifier.dart';
+import '../state/session_provider.dart';
 import '../theme/app_theme.dart';
 import '../utils/focus_utils.dart';
 
@@ -14,7 +16,6 @@ import '../utils/focus_utils.dart';
 Future<bool> mostrarDialogoInteres({
   required BuildContext context,
   required CoffeeLot lote,
-  required String compradorId,
 }) async {
   liberarFoco();
   final confirmar = await showDialog<bool>(
@@ -44,13 +45,19 @@ Future<bool> mostrarDialogoInteres({
   final messenger = ScaffoldMessenger.of(context);
   final navigator = Navigator.of(context);
   final tabs = context.read<HomeTabNotifier>();
-  final store = context.read<MockStore>();
+  final repo = context.read<InterestRequestRepository>();
+  final comprador = context.read<SessionProvider>().usuario;
+  if (comprador == null) return false;
 
   try {
-    store.crearSolicitud(compradorId: compradorId, lote: lote);
-  } on DuplicateRequestException catch (e) {
+    // Solo se muestra «Solicitud enviada» cuando Firestore la confirmó.
+    await repo.crear(comprador: comprador, lote: lote);
+  } on RepoException catch (e) {
     messenger.hideCurrentSnackBar();
-    messenger.showSnackBar(SnackBar(content: Text(e.mensaje), backgroundColor: AppColors.coffeeMedium));
+    messenger.showSnackBar(SnackBar(
+      content: Text(e.mensaje),
+      backgroundColor: e.tipo == RepoErrorKind.duplicado ? AppColors.coffeeMedium : AppColors.danger,
+    ));
     return false;
   }
 

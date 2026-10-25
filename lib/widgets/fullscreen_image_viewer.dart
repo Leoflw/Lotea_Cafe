@@ -133,7 +133,7 @@ class _FullscreenImageViewerState extends State<FullscreenImageViewer> {
                 onPageChanged: _alCambiarPagina,
                 itemBuilder: (context, i) => ZoomableImage(
                   key: ValueKey('zoom_${widget.imagenes[i]}_$i'),
-                  imagen: imageProviderFor(widget.imagenes[i]),
+                  imagen: imageProviderFor(widget.imagenes[i], anchoPx: 1600),
                   etiquetaSemantica: 'Fotografía ${i + 1} de $total',
                   onZoomChanged: i == _indiceActual ? _alZoomCambiado : null,
                 ),

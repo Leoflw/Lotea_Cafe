@@ -22,3 +22,13 @@ String formatFecha(DateTime fecha) {
   ];
   return '${fecha.day} ${meses[fecha.month - 1]} ${fecha.year}';
 }
+
+/// Fecha que puede ser nula mientras el servidor confirma la escritura.
+String formatFechaN(DateTime? fecha) => fecha == null ? 'Enviando…' : formatFecha(fecha);
+
+String formatFechaHora(DateTime? fecha) {
+  if (fecha == null) return 'Enviando…';
+  final h = fecha.hour.toString().padLeft(2, '0');
+  final m = fecha.minute.toString().padLeft(2, '0');
+  return '${formatFecha(fecha)} · $h:$m';
+}

@@ -1,10 +1,12 @@
+import '../data/codec.dart';
+
 enum UserRole { comprador, vendedor }
 
 extension UserRoleX on UserRole {
   String get label => this == UserRole.vendedor ? 'Vendedor' : 'Comprador';
 }
 
-/// Tipo de negocio del comprador (sección 15 del plan de evolución).
+/// Tipo de negocio del comprador.
 enum TipoComprador { cafeteria, tostador, restaurante, distribuidor, independiente }
 
 extension TipoCompradorX on TipoComprador {
@@ -24,8 +26,8 @@ extension TipoCompradorX on TipoComprador {
   }
 }
 
-/// Preferencias de compra, usadas hoy solo para mostrarlas en "Mi cuenta"
-/// y como base para una futura recomendación personalizada (sección 30).
+/// Preferencias de compra: se usan para mostrar "Coincide con tus
+/// preferencias" y ordenar por relevancia.
 class BuyerPreferences {
   final List<String> variedades;
   final List<String> regiones;
@@ -59,10 +61,29 @@ class BuyerPreferences {
 
   bool get estaVacia =>
       variedades.isEmpty && regiones.isEmpty && procesos.isEmpty && precioMaxCOP == null;
+
+  Map<String, dynamic> toMap() => {
+        'variedades': variedades,
+        'regiones': regiones,
+        'procesos': procesos,
+        'precioMaxCOP': precioMaxCOP,
+        'cantidadAproxKg': cantidadAproxKg,
+      };
+
+  factory BuyerPreferences.fromMap(Map<String, dynamic>? m) {
+    if (m == null) return const BuyerPreferences();
+    return BuyerPreferences(
+      variedades: readStringList(m['variedades']),
+      regiones: readStringList(m['regiones']),
+      procesos: readStringList(m['procesos']),
+      precioMaxCOP: readDouble(m['precioMaxCOP']),
+      cantidadAproxKg: readDouble(m['cantidadAproxKg']),
+    );
+  }
 }
 
-/// Cuenta de la app. La reputación/verificación del VENDEDOR vive aparte en
-/// [SellerProfile] para no duplicar datos entre colecciones.
+/// Documento `users/{uid}`. Nunca contiene contraseñas. El rol se fija en el
+/// registro y las reglas de Firestore impiden cambiarlo después.
 class AppUser {
   final String uid;
   final String email;
@@ -72,8 +93,11 @@ class AppUser {
   final String? ciudad;
   final TipoComprador? tipoComprador;
   final BuyerPreferences preferencias;
+  final bool onboardingCompleto;
+  final DateTime? createdAt;
+  final DateTime? updatedAt;
 
-  AppUser({
+  const AppUser({
     required this.uid,
     required this.email,
     required this.nombre,
@@ -82,6 +106,9 @@ class AppUser {
     this.ciudad,
     this.tipoComprador,
     this.preferencias = const BuyerPreferences(),
+    this.onboardingCompleto = false,
+    this.createdAt,
+    this.updatedAt,
   });
 
   AppUser copyWith({
@@ -90,6 +117,7 @@ class AppUser {
     String? ciudad,
     TipoComprador? tipoComprador,
     BuyerPreferences? preferencias,
+    bool? onboardingCompleto,
   }) {
     return AppUser(
       uid: uid,
@@ -100,6 +128,38 @@ class AppUser {
       ciudad: ciudad ?? this.ciudad,
       tipoComprador: tipoComprador ?? this.tipoComprador,
       preferencias: preferencias ?? this.preferencias,
+      onboardingCompleto: onboardingCompleto ?? this.onboardingCompleto,
+      createdAt: createdAt,
+      updatedAt: updatedAt,
+    );
+  }
+
+  /// Campos editables por el propio usuario (sin `rol`, `uid`, `email` ni
+  /// fechas: esos los fija el registro o el servidor).
+  Map<String, dynamic> toEditableMap() => {
+        'nombre': nombre,
+        'fotoPath': fotoPath,
+        'ciudad': ciudad,
+        'tipoComprador': tipoComprador?.name,
+        'preferencias': preferencias.toMap(),
+        'onboardingCompleto': onboardingCompleto,
+      };
+
+  factory AppUser.fromMap(String uid, Map<String, dynamic> m) {
+    return AppUser(
+      uid: uid,
+      email: readString(m['email']) ?? '',
+      nombre: readString(m['nombre']) ?? '',
+      rol: readEnum(UserRole.values, m['rol'], UserRole.comprador),
+      fotoPath: readString(m['fotoPath']),
+      ciudad: readString(m['ciudad']),
+      tipoComprador: m['tipoComprador'] is String
+          ? readEnum(TipoComprador.values, m['tipoComprador'], TipoComprador.independiente)
+          : null,
+      preferencias: BuyerPreferences.fromMap(m['preferencias'] as Map<String, dynamic>?),
+      onboardingCompleto: m['onboardingCompleto'] == true,
+      createdAt: readDate(m['createdAt']),
+      updatedAt: readDate(m['updatedAt']),
     );
   }
 }

@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import '../../utils/focus_utils.dart';
-import '../../data/mock_store.dart';
+import '../../models/discover_filters.dart';
 import '../../models/coffee_lot.dart';
 import '../../models/seller_profile.dart';
 import '../../theme/app_theme.dart';
