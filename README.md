@@ -162,17 +162,3 @@ subida a ImageKit y fallos de red. El Worker tiene sus propias pruebas
 6. Verificación de vendedores y calificaciones: campos preparados, sin proceso.
 7. Solo Android generado; iOS pendiente.
 8. El símbolo e iconos se recortaron de una imagen raster; sustituir por el vectorial.
-
-## Qué falta verificar (no se pudo ejecutar)
-
-- `flutter pub get` — las versiones de Firebase en `pubspec.yaml` son de
-  referencia y no se resolvieron.
-- `flutter analyze` y compilación: cero ejecuciones. Solo se comprobó
-  estáticamente que no haya imports inexistentes ni llaves desbalanceadas.
-- Pruebas unitarias escritas, **no ejecutadas**.
-- Reglas de Firestore: **no probadas en el emulador**. Revisarlas
-  con `firebase emulators:start` y pruebas de reglas antes de producción.
-- Recorrido manual comprador ↔ vendedor en dispositivo.
-- Fase visual: icono en el menú de apps, nombre «Lotea Café», login,
-  registro y onboarding **no se vieron en un dispositivo ni emulador**;
-  `test/brand_ui_test.dart` está escrito pero **no se ejecutó**.
