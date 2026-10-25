@@ -1,196 +1,135 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
-import 'package:provider/provider.dart';
-import '../models/coffee_lot.dart';
-import '../state/session_provider.dart';
-import '../utils/catalog_logic.dart';
+import '../models/coffee_profile.dart';
 import '../theme/app_theme.dart';
-import '../utils/format_utils.dart';
-import 'app_image.dart';
-import 'badges.dart';
 
-/// Tarjeta de descubrimiento (vista previa de un lote).
-///
-/// Composición: la FOTOGRAFÍA es la protagonista (~58 % de la altura) y la
-/// información va en un panel sólido debajo — sin degradado gigante ni
-/// texto sobre la foto. Solo se muestra lo más útil: nombre, productor,
-/// origen · variedad · proceso, precio y disponibilidad. El resto vive en el
-/// detalle.
-///
-/// Acciones: tocar cualquier parte de la tarjeta abre el perfil y el botón
-/// "Ver perfil" es la misma acción hecha visible (no hay más equivalentes).
-/// Nunca dispara "Me interesa".
+/// Tarjeta visual de un perfil de café mostrada en el feed tipo swipe.
+/// Las imágenes son archivos locales (elegidos con la galería); si no hay
+/// ninguna, se muestra un ícono de café como placeholder.
 class SwipeCard extends StatelessWidget {
-  final CoffeeLot lote;
-  final VoidCallback onVerPerfil;
+  final CoffeeProfile perfil;
 
-  /// Pista discreta "Desliza"; el padre la oculta tras unas interacciones.
-  final bool mostrarPista;
-
-  const SwipeCard({
-    super.key,
-    required this.lote,
-    required this.onVerPerfil,
-    this.mostrarPista = false,
-  });
+  const SwipeCard({super.key, required this.perfil});
 
   @override
   Widget build(BuildContext context) {
-    final usuario = context.read<SessionProvider>().usuario;
-    final coincide = usuario != null && CatalogLogic.coincideConPreferencias(lote, usuario);
-    final origen = lote.departamento;
-
-    return Semantics(
-      button: true,
-      label: 'Ver perfil de ${lote.sellerNombreMarca.isEmpty ? lote.nombre : lote.sellerNombreMarca}, ${lote.nombre}',
-      child: Material(
-        color: Colors.white,
-        elevation: 3,
-        shadowColor: Colors.black26,
-        borderRadius: BorderRadius.circular(22),
-        clipBehavior: Clip.antiAlias,
-        child: InkWell(
-          onTap: onVerPerfil,
-          child: LayoutBuilder(
-            builder: (context, c) {
-              final compacto = c.maxHeight < 400;
-              return Column(
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(24),
+      child: Stack(
+        fit: StackFit.expand,
+        children: [
+          _imagenPrincipal(),
+          Positioned(
+            left: 0,
+            right: 0,
+            bottom: 0,
+            child: Container(
+              padding: const EdgeInsets.fromLTRB(20, 60, 20, 24),
+              decoration: const BoxDecoration(
+                gradient: LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: [Colors.transparent, Colors.black87],
+                ),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Expanded(
-                    flex: compacto ? 52 : 58,
-                    child: Stack(
-                      fit: StackFit.expand,
-                      children: [
-                        AppImage(
-                          path: lote.fotos.isEmpty ? null : lote.fotos.first,
-                          fit: BoxFit.cover,
-                          ampliable: false,
-                        ),
-                        Positioned(
-                          top: 12,
-                          left: 12,
-                          right: 12,
-                          child: Row(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Expanded(
-                                child: Wrap(
-                                  spacing: 6,
-                                  runSpacing: 6,
-                                  children: [
-                                    if (lote.vendedorVerificado) const VerifiedBadge(compacto: true),
-                                    if (coincide) const _EtiquetaPreferencias(),
-                                  ],
-                                ),
-                              ),
-                              if (mostrarPista)
-                                Container(
-                                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                                  decoration: BoxDecoration(color: Colors.black.withOpacity(0.28), borderRadius: BorderRadius.circular(20)),
-                                  child: const Row(
-                                    mainAxisSize: MainAxisSize.min,
-                                    children: [
-                                      Icon(Icons.swipe, color: Colors.white70, size: 12),
-                                      SizedBox(width: 4),
-                                      Text('Desliza', style: TextStyle(color: Colors.white70, fontSize: 10)),
-                                    ],
-                                  ),
-                                ),
-                            ],
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          perfil.finca.isNotEmpty ? perfil.finca : perfil.nombreVendedor,
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontSize: 22,
+                            fontWeight: FontWeight.bold,
                           ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                      if (perfil.calificacionPromedio > 0) ...[
+                        const Icon(Icons.star, color: Colors.amber, size: 18),
+                        const SizedBox(width: 2),
+                        Text(
+                          perfil.calificacionPromedio.toStringAsFixed(1),
+                          style: const TextStyle(color: Colors.white, fontSize: 14),
                         ),
                       ],
-                    ),
+                    ],
                   ),
-                  Expanded(
-                    flex: compacto ? 48 : 42,
-                    child: Padding(
-                      padding: EdgeInsets.fromLTRB(16, compacto ? 8 : 12, 16, compacto ? 8 : 12),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                        children: [
-                          Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(
-                                lote.nombre,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(fontSize: 19, fontWeight: FontWeight.bold, color: AppColors.coffeeDark),
-                              ),
-                              const SizedBox(height: 2),
-                              Text(
-                                lote.sellerNombreMarca,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: TextStyle(fontSize: 13.5, color: Colors.grey.shade800),
-                              ),
-                              const SizedBox(height: 2),
-                              Text(
-                                [if (origen.isNotEmpty) origen, lote.varietyPrincipal, lote.proceso].join(' · '),
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: TextStyle(fontSize: 12.5, color: Colors.grey.shade600),
-                              ),
-                            ],
-                          ),
-                          Row(
-                            children: [
-                              Expanded(
-                                child: Text(
-                                  formatCOPPorUnidad(lote.precioCOP, lote.unidad),
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: AppColors.coffeeDark),
-                                ),
-                              ),
-                              if (!compacto) AvailabilityChip(disponible: lote.disponible),
-                            ],
-                          ),
-                          SizedBox(
-                            width: double.infinity,
-                            height: compacto ? 38 : 42,
-                            child: ElevatedButton.icon(
-                              onPressed: onVerPerfil,
-                              icon: const Icon(Icons.storefront_outlined, size: 18),
-                              label: const Text('Ver perfil'),
-                              style: ElevatedButton.styleFrom(
-                                minimumSize: const Size(0, 38),
-                                padding: const EdgeInsets.symmetric(horizontal: 12),
-                                textStyle: const TextStyle(fontSize: 14, fontWeight: FontWeight.bold),
-                              ),
-                            ),
-                          ),
-                        ],
+                  const SizedBox(height: 4),
+                  Text(
+                    perfil.nombreVendedor,
+                    style: const TextStyle(color: Colors.white70, fontSize: 14),
+                  ),
+                  const SizedBox(height: 10),
+                  Wrap(
+                    spacing: 6,
+                    runSpacing: 6,
+                    children: perfil.variedades.take(4).map((v) => _Chip(texto: v)).toList(),
+                  ),
+                  const SizedBox(height: 10),
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      Text(
+                        '\$${perfil.precioPorKg.toStringAsFixed(2)} / kg',
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontWeight: FontWeight.bold,
+                          fontSize: 16,
+                        ),
                       ),
-                    ),
+                      if (perfil.altitudMsnm != null)
+                        Text(
+                          '${perfil.altitudMsnm!.toStringAsFixed(0)} msnm',
+                          style: const TextStyle(color: Colors.white70, fontSize: 13),
+                        ),
+                    ],
                   ),
                 ],
-              );
-            },
+              ),
+            ),
           ),
-        ),
+        ],
+      ),
+    );
+  }
+
+  Widget _imagenPrincipal() {
+    if (perfil.imagenes.isEmpty) {
+      return Container(
+        color: AppColors.coffeeLight,
+        child: const Icon(Icons.coffee, size: 64, color: Colors.white),
+      );
+    }
+    final archivo = File(perfil.imagenes.first);
+    return Image.file(
+      archivo,
+      fit: BoxFit.cover,
+      errorBuilder: (_, __, ___) => Container(
+        color: AppColors.coffeeLight,
+        child: const Icon(Icons.coffee, size: 64, color: Colors.white),
       ),
     );
   }
 }
 
-class _EtiquetaPreferencias extends StatelessWidget {
-  const _EtiquetaPreferencias();
+class _Chip extends StatelessWidget {
+  final String texto;
+  const _Chip({required this.texto});
 
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-      decoration: BoxDecoration(color: AppColors.leafGreen.withOpacity(0.92), borderRadius: BorderRadius.circular(20)),
-      child: const Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Icon(Icons.tune, color: Colors.white, size: 12),
-          SizedBox(width: 4),
-          Text('Coincide con tus preferencias', style: TextStyle(color: Colors.white, fontSize: 10.5, fontWeight: FontWeight.bold)),
-        ],
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+      decoration: BoxDecoration(
+        color: Colors.white.withOpacity(0.22),
+        borderRadius: BorderRadius.circular(20),
       ),
+      child: Text(texto, style: const TextStyle(color: Colors.white, fontSize: 12)),
     );
   }
 }
