@@ -7,10 +7,6 @@
 Antes se llamaba CaféMatch. Esta es la **cuarta ronda de mejoras**: migración
 de datos locales a Firebase, nueva identidad y flujo completo de cotizaciones.
 
-> **Estado honesto de esta entrega:** el código se escribió sin acceso a
-> Flutter, Dart, Firebase ni red, así que **no se ha compilado, analizado ni
-> ejecutado**. Ver «Qué falta verificar» antes de confiar en él.
-
 ## Qué hace la app
 
 - **Comprador:** descubre cafés (tarjetas o lista), filtra y busca, guarda
