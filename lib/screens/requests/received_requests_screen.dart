@@ -1,18 +1,18 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import '../../data/mock_store.dart';
 import '../../models/interest_request.dart';
-import '../../repositories/interest_request_repository.dart';
-import '../../state/activity_provider.dart';
+import '../../services/session_provider.dart';
 import '../../theme/app_theme.dart';
 import '../../utils/format_utils.dart';
 import '../../widgets/app_image.dart';
 import '../../widgets/empty_state.dart';
-import '../../widgets/remote_view.dart';
+import '../coffee/coffee_lot_detail_screen.dart';
 import '../chat/chat_screen.dart';
-import '../quotes/quote_detail_screen.dart';
-import '../quotes/quote_widgets.dart';
+import '../chat/quote_request_screen.dart';
 
-/// Vendedor: compradores interesados, conexiones y cotizaciones recibidas.
+/// "Solicitudes recibidas" del vendedor: compradores interesados en sus
+/// cafés, con acciones Aceptar/Rechazar, más sus conexiones activas.
 class ReceivedRequestsScreen extends StatefulWidget {
   const ReceivedRequestsScreen({super.key});
 
@@ -21,7 +21,7 @@ class ReceivedRequestsScreen extends StatefulWidget {
 }
 
 class _ReceivedRequestsScreenState extends State<ReceivedRequestsScreen> with SingleTickerProviderStateMixin {
-  late final TabController _tabs = TabController(length: 3, vsync: this);
+  late final TabController _tabs = TabController(length: 2, vsync: this);
 
   @override
   void dispose() {
@@ -31,91 +31,35 @@ class _ReceivedRequestsScreenState extends State<ReceivedRequestsScreen> with Si
 
   @override
   Widget build(BuildContext context) {
-    final a = context.watch<ActivityProvider>();
-    final pendientes = a.pendientes;
-    final conexiones = a.conexiones;
-    final cotizaciones = a.listaCotizaciones;
+    final store = context.watch<MockStore>();
+    final uid = context.read<SessionProvider>().usuario!.uid;
+    final perfil = store.obtenerPerfilVendedor(uid);
+    final sellerId = perfil?.id ?? uid;
+
+    final recibidas = store.solicitudesRecibidas(sellerId).where((s) => s.estado == EstadoSolicitud.pendiente).toList();
+    final conexiones = store.conexionesVendedor(sellerId);
+
     return Scaffold(
       appBar: AppBar(
         title: const Text('Solicitudes'),
         bottom: TabBar(
           controller: _tabs,
-          isScrollable: true,
-          tabAlignment: TabAlignment.start,
           labelColor: AppColors.coffeeMedium,
           indicatorColor: AppColors.coffeeMedium,
-          tabs: [
-            Tab(text: 'Interesados (${pendientes.length})'),
-            Tab(text: 'Conexiones (${conexiones.length})'),
-            Tab(text: 'Cotizaciones (${cotizaciones.length})'),
-          ],
+          tabs: [Tab(text: 'Compradores interesados (${recibidas.length})'), Tab(text: 'Conexiones (${conexiones.length})')],
         ),
       ),
-      body: TabBarView(
-        controller: _tabs,
-        children: [
-          RemoteView<List<InterestRequest>>(
-            remote: a.solicitudes,
-            onReintentar: a.reintentar,
-            builder: (_) => _ListaRecibidas(solicitudes: pendientes),
-          ),
-          RemoteView<List<InterestRequest>>(
-            remote: a.solicitudes,
-            onReintentar: a.reintentar,
-            builder: (_) => _ListaConexiones(conexiones: conexiones),
-          ),
-          RemoteView(
-            remote: a.cotizaciones,
-            onReintentar: a.reintentar,
-            builder: (_) => cotizaciones.isEmpty
-                ? const EmptyState(
-                    icono: Icons.request_quote_outlined,
-                    titulo: 'Aún no recibes solicitudes de cotización',
-                    subtitulo: 'Los compradores con conexión aceptada podrán pedirte precio y condiciones.',
-                  )
-                : ListView.separated(
-                    padding: const EdgeInsets.all(16),
-                    itemCount: cotizaciones.length,
-                    separatorBuilder: (_, __) => const SizedBox(height: 10),
-                    itemBuilder: (context, i) => QuoteCard(
-                      cotizacion: cotizaciones[i],
-                      verComoVendedor: true,
-                      onTap: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => QuoteDetailScreen(quoteId: cotizaciones[i].id))),
-                    ),
-                  ),
-          ),
-        ],
-      ),
+      body: TabBarView(controller: _tabs, children: [_ListaRecibidas(solicitudes: recibidas), _ListaConexiones(conexiones: conexiones)]),
     );
   }
 }
 
-class _ListaRecibidas extends StatefulWidget {
+class _ListaRecibidas extends StatelessWidget {
   final List<InterestRequest> solicitudes;
   const _ListaRecibidas({required this.solicitudes});
 
   @override
-  State<_ListaRecibidas> createState() => _ListaRecibidasState();
-}
-
-class _ListaRecibidasState extends State<_ListaRecibidas> {
-  final Set<String> _procesando = {};
-
-  Future<void> _responder(InterestRequest s, bool aceptar) async {
-    if (_procesando.contains(s.id)) return;
-    setState(() => _procesando.add(s.id));
-    try {
-      await context.read<InterestRequestRepository>().responder(s.id, aceptar: aceptar);
-    } catch (e) {
-      if (mounted) mostrarError(context, e);
-    } finally {
-      if (mounted) setState(() => _procesando.remove(s.id));
-    }
-  }
-
-  @override
   Widget build(BuildContext context) {
-    final solicitudes = widget.solicitudes;
     if (solicitudes.isEmpty) {
       return const EmptyState(
         icono: Icons.inbox_outlined,
@@ -123,13 +67,15 @@ class _ListaRecibidasState extends State<_ListaRecibidas> {
         subtitulo: 'Cuando un comprador muestre interés en tu café, aparecerá aquí.',
       );
     }
+    final store = context.read<MockStore>();
     return ListView.separated(
       padding: const EdgeInsets.all(16),
       itemCount: solicitudes.length,
       separatorBuilder: (_, __) => const SizedBox(height: 10),
       itemBuilder: (context, i) {
         final s = solicitudes[i];
-        final ocupado = _procesando.contains(s.id);
+        final comprador = store.usuarioPorId(s.compradorId);
+        final lote = store.lotePorId(s.coffeeLotId);
         return Card(
           child: Padding(
             padding: const EdgeInsets.all(14),
@@ -138,47 +84,49 @@ class _ListaRecibidasState extends State<_ListaRecibidas> {
               children: [
                 Row(
                   children: [
-                    AppImage(path: s.loteFoto, width: 46, height: 46, borderRadius: BorderRadius.circular(12), ampliable: false),
+                    AppImage(
+                      path: lote != null && lote.fotos.isNotEmpty ? lote.fotos.first : null,
+                      width: 46,
+                      height: 46,
+                      borderRadius: BorderRadius.circular(12),
+                      ampliable: false,
+                    ),
                     const SizedBox(width: 12),
                     Expanded(
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text(s.compradorNombre.isEmpty ? 'Comprador' : s.compradorNombre, style: const TextStyle(fontWeight: FontWeight.bold)),
-                          Text([if (s.compradorTipo != null) s.compradorTipo!, if (s.compradorCiudad != null) s.compradorCiudad!].join(' · '),
-                              style: TextStyle(color: Colors.grey.shade600, fontSize: 12)),
+                          Text(comprador?.nombre ?? 'Comprador', style: const TextStyle(fontWeight: FontWeight.bold)),
+                          Text(
+                            [
+                              if (comprador?.tipoComprador != null) comprador!.tipoComprador!.label,
+                              if (comprador?.ciudad != null) comprador!.ciudad!,
+                            ].join(' · '),
+                            style: TextStyle(color: Colors.grey.shade600, fontSize: 12),
+                          ),
                         ],
                       ),
                     ),
-                    Text(formatFechaN(s.fecha), style: TextStyle(color: Colors.grey.shade500, fontSize: 11)),
+                    Text(formatFecha(s.fecha), style: TextStyle(color: Colors.grey.shade500, fontSize: 11)),
                   ],
                 ),
                 const SizedBox(height: 10),
-                Text('Interesado en: ${s.loteNombre}', style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
-                if (s.lotePrecioCOP != null)
-                  Text(formatCOPPorUnidad(s.lotePrecioCOP!, s.loteUnidad ?? 'kg'), style: const TextStyle(color: AppColors.coffeeDark, fontSize: 12.5)),
-                if ((s.mensaje ?? '').isNotEmpty) ...[
-                  const SizedBox(height: 6),
-                  Text('«${s.mensaje}»', style: TextStyle(color: Colors.grey.shade700, fontSize: 12.5, fontStyle: FontStyle.italic)),
-                ],
+                Text('Interesado en: ${lote?.nombre ?? 'café'}', style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13)),
+                if (lote != null)
+                  Text(formatCOPPorUnidad(lote.precioCOP, lote.unidad), style: const TextStyle(color: AppColors.coffeeDark, fontSize: 12.5)),
                 const SizedBox(height: 12),
                 Row(
                   children: [
                     Expanded(
                       child: OutlinedButton(
-                        onPressed: ocupado ? null : () => _responder(s, false),
+                        onPressed: () => store.rechazarSolicitud(s.id),
                         style: OutlinedButton.styleFrom(foregroundColor: AppColors.danger),
                         child: const Text('Rechazar'),
                       ),
                     ),
                     const SizedBox(width: 10),
                     Expanded(
-                      child: ElevatedButton(
-                        onPressed: ocupado ? null : () => _responder(s, true),
-                        child: ocupado
-                            ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                            : const Text('Aceptar'),
-                      ),
+                      child: ElevatedButton(onPressed: () => store.aceptarSolicitud(s.id), child: const Text('Aceptar')),
                     ),
                   ],
                 ),
@@ -204,21 +152,64 @@ class _ListaConexiones extends StatelessWidget {
         subtitulo: 'Acepta una solicitud para habilitar el chat con ese comprador.',
       );
     }
+    final store = context.read<MockStore>();
     return ListView.separated(
       padding: const EdgeInsets.all(16),
       itemCount: conexiones.length,
       separatorBuilder: (_, __) => const SizedBox(height: 10),
       itemBuilder: (context, i) {
         final c = conexiones[i];
+        final comprador = store.usuarioPorId(c.compradorId);
+        final lote = store.lotePorId(c.coffeeLotId);
+        final nombre = comprador?.nombre ?? 'Comprador';
         return Card(
-          child: ListTile(
-            leading: AppImage(path: c.loteFoto, width: 44, height: 44, borderRadius: BorderRadius.circular(10), ampliable: false),
-            title: Text(c.compradorNombre.isEmpty ? 'Comprador' : c.compradorNombre, style: const TextStyle(fontWeight: FontWeight.bold)),
-            subtitle: Text(c.loteNombre),
-            trailing: const Icon(Icons.chat_bubble_outline),
-            onTap: () => Navigator.of(context).push(MaterialPageRoute(
-              builder: (_) => ChatScreen(interestRequestId: c.id, otroNombre: c.compradorNombre),
-            )),
+          child: Padding(
+            padding: const EdgeInsets.all(12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    AppImage(
+                      path: lote != null && lote.fotos.isNotEmpty ? lote.fotos.first : null,
+                      width: 46,
+                      height: 46,
+                      borderRadius: BorderRadius.circular(12),
+                      ampliable: false,
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(nombre, style: const TextStyle(fontWeight: FontWeight.bold)),
+                          Text('Café: ${lote?.nombre ?? '—'}', style: TextStyle(color: Colors.grey.shade600, fontSize: 12.5)),
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 10),
+                Row(
+                  children: [
+                    if (lote != null)
+                      Expanded(
+                        child: OutlinedButton(
+                          onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => CoffeeLotDetailScreen(coffeeLotId: lote.id))),
+                          child: const Text('Ver café', style: TextStyle(fontSize: 12)),
+                        ),
+                      ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: ElevatedButton(
+                        onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => ChatScreen(interestRequestId: c.id, otroNombre: nombre))),
+                        child: const Text('Abrir conversación', style: TextStyle(fontSize: 12)),
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
           ),
         );
       },

@@ -1,14 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import '../../repositories/coffee_lot_repository.dart';
-import '../../repositories/favorite_repository.dart';
-import '../../repositories/seller_repository.dart';
-import '../../state/activity_provider.dart';
-import '../../models/coffee_lot.dart';
-import '../../widgets/remote_view.dart';
+import '../../data/mock_store.dart';
 import '../../models/favorite.dart';
 import '../../models/seller_profile.dart';
-import '../../state/session_provider.dart';
+import '../../services/session_provider.dart';
 import '../../theme/app_theme.dart';
 import '../../widgets/app_image.dart';
 import '../../widgets/badges.dart';
@@ -31,43 +26,22 @@ class SellerDetailScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final sellers = context.read<SellerRepository>();
-    final lots = context.read<CoffeeLotRepository>();
-    Widget envolver(Widget hijo) => Scaffold(appBar: AppBar(), body: hijo);
-    return StreamView<SellerProfile?>(
-      crear: () => sellers.observar(sellerId),
-      builder: (context, vendedor) {
-        if (vendedor == null) {
-          return envolver(const EmptyState(icono: Icons.error_outline, titulo: 'Vendedor no encontrado'));
-        }
-        return StreamView<List<CoffeeLot>>(
-          crear: () => lots.observarPublicadosDeVendedor(sellerId),
-          builder: (context, lotes) => _Detalle(vendedor: vendedor, lotes: lotes, loteDestacadoId: loteDestacadoId),
-        );
-      },
-    );
-  }
-}
-
-class _Detalle extends StatelessWidget {
-  final SellerProfile vendedor;
-  final List<CoffeeLot> lotes;
-  final String? loteDestacadoId;
-  const _Detalle({required this.vendedor, required this.lotes, this.loteDestacadoId});
-
-  String get sellerId => vendedor.id;
-
-  @override
-  Widget build(BuildContext context) {
-    final actividad = context.watch<ActivityProvider>();
+    final store = context.watch<MockStore>();
     final session = context.read<SessionProvider>();
+    final vendedor = store.perfilVendedorPorId(sellerId);
+
+    if (vendedor == null) {
+      return const Scaffold(body: EmptyState(icono: Icons.error_outline, titulo: 'Vendedor no encontrado'));
+    }
+
+    final lotes = store.lotesDeVendedor(sellerId).where((l) => l.publicado).toList();
     final galeriaCompleta = [
       if (vendedor.fotoPrincipal != null) vendedor.fotoPrincipal!,
       ...vendedor.galeria,
     ];
     final esGuardado = session.usuario != null &&
         !session.esVendedor &&
-        actividad.esFavorito(TipoFavorito.vendedor, sellerId);
+        store.esFavorito(compradorId: session.usuario!.uid, tipo: TipoFavorito.vendedor, refId: sellerId);
 
     return Scaffold(
       body: CustomScrollView(
@@ -81,18 +55,7 @@ class _Detalle extends StatelessWidget {
                 IconButton(
                   icon: Icon(esGuardado ? Icons.bookmark : Icons.bookmark_border, color: Colors.white),
                   tooltip: 'Guardar vendedor',
-                  onPressed: () async {
-                    try {
-                      await context.read<FavoriteRepository>().alternar(
-                            compradorId: session.usuario!.uid,
-                            tipo: TipoFavorito.vendedor,
-                            refId: sellerId,
-                            yaEsFavorito: esGuardado,
-                          );
-                    } catch (e) {
-                      if (context.mounted) mostrarError(context, e);
-                    }
-                  },
+                  onPressed: () => store.alternarFavorito(compradorId: session.usuario!.uid, tipo: TipoFavorito.vendedor, refId: sellerId),
                 ),
             ],
             flexibleSpace: FlexibleSpaceBar(
@@ -122,7 +85,7 @@ class _Detalle extends StatelessWidget {
                     const SizedBox(width: 4),
                     Text(vendedor.ubicacionCorta, style: TextStyle(color: Colors.grey.shade700)),
                     const SizedBox(width: 14),
-                    if (vendedor.tieneCalificaciones) RatingBadge(calificacion: vendedor.calificacionPromedio, color: AppColors.coffeeDark),
+                    RatingBadge(calificacion: vendedor.calificacionPromedio, color: AppColors.coffeeDark),
                   ],
                 ),
 
@@ -219,7 +182,7 @@ class _Detalle extends StatelessWidget {
                   label: const Text('Solicitar contacto'),
                   onPressed: () {
                     final lote = lotes.firstWhere((l) => l.id == loteDestacadoId, orElse: () => lotes.first);
-                    mostrarDialogoInteres(context: context, lote: lote);
+                    mostrarDialogoInteres(context: context, lote: lote, compradorId: session.usuario!.uid);
                   },
                 ),
               ),

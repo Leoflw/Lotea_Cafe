@@ -1,77 +1,60 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_card_swiper/flutter_card_swiper.dart';
 import 'package:provider/provider.dart';
+import '../../data/mock_store.dart';
 import '../../models/coffee_lot.dart';
-import '../../state/activity_provider.dart';
+import '../../services/session_provider.dart';
 import '../../theme/app_theme.dart';
 import '../../widgets/empty_state.dart';
 import '../../widgets/interest_dialog.dart';
 import '../../widgets/swipe_card.dart';
 import '../seller/seller_detail_screen.dart';
 
-/// Modo "Tarjetas": el swipe como mecanismo OPCIONAL de descubrimiento.
-///
-/// Acciones (sin redundancia): tocar la tarjeta o su botón "Ver perfil" abre
-/// el perfil; debajo hay solo dos decisiones — Descartar y Me interesa — con
-/// etiqueta de texto además del ícono. El gesto equivale a esos botones.
+/// Modo "Tarjetas": mecánica de swipe conservada como mecanismo OPCIONAL de
+/// descubrimiento rápido, no como el centro de la app (sección 7 y 13,
+/// 2ª ronda). Acciones con etiqueta de texto (no solo íconos) para
+/// accesibilidad, y "Deshacer" tras un descarte (sección 15).
 class SwipeModeView extends StatefulWidget {
   final List<CoffeeLot> lotes;
   final VoidCallback onCambioLista;
 
-  /// Se llama al volver del perfil para que Descubrir recargue si el
-  /// catálogo cambió (p. ej. se envió una solicitud desde el detalle).
-  final VoidCallback onRegresoDeDetalle;
-
-  const SwipeModeView({
-    super.key,
-    required this.lotes,
-    required this.onCambioLista,
-    required this.onRegresoDeDetalle,
-  });
+  const SwipeModeView({super.key, required this.lotes, required this.onCambioLista});
 
   @override
   State<SwipeModeView> createState() => _SwipeModeViewState();
 }
 
 class _SwipeModeViewState extends State<SwipeModeView> {
-  static const int _interaccionesParaOcultarPista = 3;
-
   final _controller = CardSwiperController();
-  int _interacciones = 0;
 
-  bool get _mostrarPista => _interacciones < _interaccionesParaOcultarPista;
-
-  Future<void> _abrirPerfil(CoffeeLot lote) async {
-    await Navigator.of(context).push(
+  void _abrirPerfil(CoffeeLot lote) {
+    Navigator.of(context).push(
       MaterialPageRoute(builder: (_) => SellerDetailScreen(sellerId: lote.sellerId, loteDestacadoId: lote.id)),
     );
-    if (mounted) widget.onRegresoDeDetalle();
   }
 
   void _descartar(int index) {
-    final actividad = context.read<ActivityProvider>();
-    actividad.descartar(widget.lotes[index].id);
+    final store = context.read<MockStore>();
+    final uid = context.read<SessionProvider>().usuario!.uid;
+    final loteId = widget.lotes[index].id;
+    store.descartarLote(compradorId: uid, coffeeLotId: loteId);
 
     ScaffoldMessenger.of(context).hideCurrentSnackBar();
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
         content: const Text('Café descartado'),
-        duration: const Duration(seconds: 3),
         action: SnackBarAction(
           label: 'Deshacer',
-          onPressed: () {
-            actividad.deshacerUltimoDescarte();
-            _controller.undo(); // devuelve también la tarjeta al mazo
-          },
+          onPressed: () => store.deshacerUltimoDescarte(uid),
         ),
+        duration: const Duration(seconds: 3),
       ),
     );
   }
 
   Future<void> _meInteresa(int index) async {
-    final enviada = await mostrarDialogoInteres(context: context, lote: widget.lotes[index]);
-    // Si canceló (o ya existía), la tarjeta vuelve al mazo: no se pierde un café sin decidir.
-    if (!enviada && mounted) _controller.undo();
+    final uid = context.read<SessionProvider>().usuario!.uid;
+    await mostrarDialogoInteres(context: context, lote: widget.lotes[index], compradorId: uid);
   }
 
   @override
@@ -87,7 +70,7 @@ class _SwipeModeViewState extends State<SwipeModeView> {
     }
 
     return Padding(
-      padding: const EdgeInsets.fromLTRB(16, 4, 16, 8),
+      padding: const EdgeInsets.fromLTRB(20, 8, 20, 8),
       child: Column(
         children: [
           Expanded(
@@ -95,62 +78,92 @@ class _SwipeModeViewState extends State<SwipeModeView> {
               controller: _controller,
               cardsCount: widget.lotes.length,
               numberOfCardsDisplayed: widget.lotes.length < 2 ? 1 : 2,
-              backCardOffset: const Offset(0, 18),
+              backCardOffset: const Offset(0, 24),
               padding: EdgeInsets.zero,
               onSwipe: (previousIndex, currentIndex, direction) {
-                // Solo izquierda (descartar) y derecha (me interesa) deciden
-                // algo. Arriba/abajo se cancelan: la tarjeta vuelve al mazo.
-                if (direction != CardSwiperDirection.left && direction != CardSwiperDirection.right) {
-                  return false;
-                }
                 if (direction == CardSwiperDirection.left) {
                   _descartar(previousIndex);
                 } else if (direction == CardSwiperDirection.right) {
                   _meInteresa(previousIndex);
                 }
-                if (_mostrarPista) setState(() => _interacciones++);
                 return true;
               },
               cardBuilder: (context, index, _, __) {
                 final lote = widget.lotes[index];
-                return SwipeCard(
-                  lote: lote,
-                  mostrarPista: _mostrarPista && index == 0,
-                  onVerPerfil: () => _abrirPerfil(lote),
-                );
+                final vendedor = context.read<MockStore>().perfilVendedorPorId(lote.sellerId);
+                return SwipeCard(lote: lote, vendedor: vendedor, onVerPerfil: () => _abrirPerfil(lote));
               },
             ),
           ),
-          const SizedBox(height: 10),
+          const SizedBox(height: 12),
           Row(
+            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
             children: [
-              Expanded(
-                child: OutlinedButton.icon(
-                  onPressed: () => _controller.swipe(CardSwiperDirection.left),
-                  icon: const Icon(Icons.close, size: 18),
-                  label: const Text('Descartar'),
-                  style: OutlinedButton.styleFrom(
-                    minimumSize: const Size(0, 46),
-                    foregroundColor: AppColors.danger,
-                    side: const BorderSide(color: AppColors.danger, width: 1.2),
-                  ),
-                ),
+              _boton(
+                icono: Icons.close,
+                etiqueta: 'Descartar',
+                color: AppColors.danger,
+                tooltip: 'Descartar este café',
+                onTap: () => _controller.swipe(CardSwiperDirection.left),
               ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: ElevatedButton.icon(
-                  onPressed: () => _controller.swipe(CardSwiperDirection.right),
-                  icon: const Icon(Icons.coffee_outlined, size: 18),
-                  label: const Text('Me interesa'),
-                  style: ElevatedButton.styleFrom(
-                    minimumSize: const Size(0, 46),
-                    backgroundColor: AppColors.leafGreen,
-                  ),
-                ),
+              _boton(
+                icono: Icons.storefront_outlined,
+                etiqueta: 'Ver perfil',
+                color: AppColors.coffeeMedium,
+                tooltip: 'Ver perfil completo del vendedor',
+                onTap: () => _abrirPerfil(widget.lotes.first),
+                grande: true,
+              ),
+              _boton(
+                icono: Icons.coffee,
+                etiqueta: 'Me interesa',
+                color: AppColors.leafGreen,
+                tooltip: 'Enviar solicitud de contacto',
+                onTap: () => _controller.swipe(CardSwiperDirection.right),
               ),
             ],
           ),
         ],
+      ),
+    );
+  }
+
+  Widget _boton({
+    required IconData icono,
+    required String etiqueta,
+    required Color color,
+    required String tooltip,
+    required VoidCallback onTap,
+    bool grande = false,
+  }) {
+    return Semantics(
+      button: true,
+      label: etiqueta,
+      child: Tooltip(
+        message: tooltip,
+        child: InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(16),
+          child: Padding(
+            padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 4),
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Container(
+                  padding: EdgeInsets.all(grande ? 15 : 14),
+                  decoration: BoxDecoration(
+                    shape: BoxShape.circle,
+                    color: Colors.white,
+                    boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.12), blurRadius: 10, offset: const Offset(0, 4))],
+                  ),
+                  child: Icon(icono, color: color, size: grande ? 24 : 22),
+                ),
+                const SizedBox(height: 4),
+                Text(etiqueta, style: TextStyle(fontSize: 11, color: color, fontWeight: FontWeight.w600)),
+              ],
+            ),
+          ),
+        ),
       ),
     );
   }

@@ -1,28 +1,18 @@
+import 'dart:io';
 import 'package:flutter/material.dart';
-import '../utils/image_source.dart';
-import 'zoomable_image.dart';
 
-/// Visor de imágenes a pantalla completa, reutilizable en toda la app.
-///
-/// Arquitectura de gestos (corrige el conflicto zoom/pan/cierre de la versión
-/// anterior, donde un GestureDetector vertical desplazaba TODO el contenido):
-///  - Zoom, pan y doble toque viven dentro de [ZoomableImage] (una instancia
-///    con su propio TransformationController por página).
-///  - Este widget solo decide dos cosas según el estado de zoom que le reporta
-///    la página actual:
-///      * cambio de página: deshabilitado mientras la imagen está ampliada
-///        (así el arrastre horizontal mueve la imagen, no el PageView);
-///      * cierre por gesto vertical: solo a 1x y con UN dedo. No desplaza la
-///        imagen (a 1x debe permanecer centrada); solo atenúa el fondo y
-///        cierra al superar un umbral.
+/// Visor de imágenes a pantalla completa, reutilizable en toda la app
+/// (perfil de vendedor, galería, detalle del café, guardados, etc.).
+/// Soporta zoom con pellizco, swipe entre varias imágenes, cierre con X
+/// y cierre deslizando hacia abajo.
 class FullscreenImageViewer extends StatefulWidget {
-  final List<String> imagenes;
+  final List<String> imagenes; // rutas locales
   final int indiceInicial;
 
   const FullscreenImageViewer({super.key, required this.imagenes, this.indiceInicial = 0});
 
-  /// Punto de entrada único: abre el visor sobre [images] empezando en
-  /// [initialIndex]. Al cerrar, vuelve exactamente a la pantalla anterior.
+  /// Punto de entrada único: abre el visor sobre [images], empezando
+  /// exactamente en [initialIndex].
   static Future<void> abrir(
     BuildContext context, {
     required List<String> images,
@@ -32,10 +22,9 @@ class FullscreenImageViewer extends StatefulWidget {
     return Navigator.of(context).push(
       PageRouteBuilder(
         opaque: false,
-        pageBuilder: (_, __, ___) => FullscreenImageViewer(
-          imagenes: images,
-          indiceInicial: initialIndex.clamp(0, images.length - 1),
-        ),
+        barrierColor: Colors.black,
+        pageBuilder: (_, __, ___) =>
+            FullscreenImageViewer(imagenes: images, indiceInicial: initialIndex.clamp(0, images.length - 1)),
         transitionsBuilder: (_, anim, __, child) => FadeTransition(opacity: anim, child: child),
       ),
     );
@@ -46,16 +35,10 @@ class FullscreenImageViewer extends StatefulWidget {
 }
 
 class _FullscreenImageViewerState extends State<FullscreenImageViewer> {
-  static const double _umbralCierre = 110;
-  static const double _velocidadCierre = 900;
-
   late final PageController _pageController = PageController(initialPage: widget.indiceInicial);
   late int _indiceActual = widget.indiceInicial;
-
-  bool _ampliada = false;
   double _arrastreVertical = 0;
-  int _punteros = 0;
-  bool _huboMultitouch = false;
+  bool _cerrando = false;
 
   @override
   void dispose() {
@@ -63,80 +46,51 @@ class _FullscreenImageViewerState extends State<FullscreenImageViewer> {
     super.dispose();
   }
 
-  void _cerrar() => Navigator.of(context).maybePop();
-
-  void _alZoomCambiado(bool ampliada) {
-    setState(() {
-      _ampliada = ampliada;
-      if (ampliada) _arrastreVertical = 0;
-    });
-  }
-
-  void _alCambiarPagina(int i) {
-    setState(() {
-      _indiceActual = i;
-      _ampliada = false; // la página nueva siempre abre en 1x
-      _arrastreVertical = 0;
-    });
-  }
-
-  void _arrastreActualizado(DragUpdateDetails d) {
-    if (_huboMultitouch || _ampliada) return;
-    setState(() => _arrastreVertical += d.delta.dy);
-  }
-
-  void _arrastreTerminado(DragEndDetails d) {
-    final velocidad = d.primaryVelocity ?? 0;
-    final cerrar = !_huboMultitouch &&
-        !_ampliada &&
-        (_arrastreVertical.abs() > _umbralCierre || velocidad.abs() > _velocidadCierre);
-    if (cerrar) {
-      _cerrar();
-    } else {
-      setState(() => _arrastreVertical = 0);
-    }
-  }
-
-  void _punteroAbajo(PointerDownEvent _) {
-    _punteros++;
-    if (_punteros > 1) _huboMultitouch = true;
-  }
-
-  void _punteroArriba(PointerEvent _) {
-    _punteros = (_punteros - 1).clamp(0, 10).toInt();
-    if (_punteros == 0) _huboMultitouch = false;
+  void _cerrar() {
+    if (!_cerrando) Navigator.of(context).pop();
   }
 
   @override
   Widget build(BuildContext context) {
-    // El fondo se atenúa con el arrastre; la imagen NO se mueve.
-    final opacidadFondo = (1 - (_arrastreVertical.abs() / 420)).clamp(0.35, 1.0).toDouble();
-    final total = widget.imagenes.length;
+    final opacidadFondo = (1 - (_arrastreVertical.abs() / 400)).clamp(0.0, 1.0);
 
-    return Listener(
-      onPointerDown: _punteroAbajo,
-      onPointerUp: _punteroArriba,
-      onPointerCancel: _punteroArriba,
-      child: GestureDetector(
-        // Sin handlers cuando está ampliada: no se registra el reconocedor
-        // vertical y no compite con el pan de la imagen.
-        onVerticalDragUpdate: _ampliada ? null : _arrastreActualizado,
-        onVerticalDragEnd: _ampliada ? null : _arrastreTerminado,
-        child: Container(
-          color: Colors.black.withOpacity(opacidadFondo),
+    return GestureDetector(
+      onVerticalDragUpdate: (details) => setState(() => _arrastreVertical += details.delta.dy),
+      onVerticalDragEnd: (details) {
+        if (_arrastreVertical.abs() > 120) {
+          _cerrando = true;
+          _cerrar();
+        } else {
+          setState(() => _arrastreVertical = 0);
+        }
+      },
+      child: Container(
+        color: Colors.black.withOpacity(opacidadFondo),
+        child: Transform.translate(
+          offset: Offset(0, _arrastreVertical),
           child: Stack(
             children: [
               PageView.builder(
                 controller: _pageController,
-                itemCount: total,
-                physics: _ampliada ? const NeverScrollableScrollPhysics() : const PageScrollPhysics(),
-                onPageChanged: _alCambiarPagina,
-                itemBuilder: (context, i) => ZoomableImage(
-                  key: ValueKey('zoom_${widget.imagenes[i]}_$i'),
-                  imagen: imageProviderFor(widget.imagenes[i], anchoPx: 1600),
-                  etiquetaSemantica: 'Fotografía ${i + 1} de $total',
-                  onZoomChanged: i == _indiceActual ? _alZoomCambiado : null,
-                ),
+                itemCount: widget.imagenes.length,
+                onPageChanged: (i) => setState(() => _indiceActual = i),
+                itemBuilder: (context, i) {
+                  return InteractiveViewer(
+                    minScale: 1,
+                    maxScale: 4,
+                    child: Center(
+                      child: Image.file(
+                        File(widget.imagenes[i]),
+                        fit: BoxFit.contain,
+                        errorBuilder: (_, __, ___) => const Icon(
+                          Icons.image_not_supported_outlined,
+                          color: Colors.white38,
+                          size: 64,
+                        ),
+                      ),
+                    ),
+                  );
+                },
               ),
               Positioned(
                 top: 0,
@@ -150,27 +104,22 @@ class _FullscreenImageViewerState extends State<FullscreenImageViewer> {
                       children: [
                         IconButton(
                           icon: const Icon(Icons.close, color: Colors.white),
-                          tooltip: 'Cerrar galería',
-                          iconSize: 26,
-                          style: IconButton.styleFrom(
-                            backgroundColor: Colors.black38,
-                            minimumSize: const Size(48, 48),
-                          ),
+                          tooltip: 'Cerrar',
                           onPressed: _cerrar,
                         ),
-                        if (total > 1)
-                          Semantics(
-                            label: 'Fotografía ${_indiceActual + 1} de $total',
-                            child: Container(
-                              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
-                              decoration: BoxDecoration(color: Colors.black54, borderRadius: BorderRadius.circular(20)),
-                              child: Text(
-                                '${_indiceActual + 1} / $total',
-                                style: const TextStyle(color: Colors.white, fontSize: 14),
-                              ),
+                        if (widget.imagenes.length > 1)
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
+                            decoration: BoxDecoration(
+                              color: Colors.black54,
+                              borderRadius: BorderRadius.circular(20),
+                            ),
+                            child: Text(
+                              '${_indiceActual + 1} / ${widget.imagenes.length}',
+                              style: const TextStyle(color: Colors.white, fontSize: 13),
                             ),
                           ),
-                        const SizedBox(width: 48),
+                        const SizedBox(width: 40),
                       ],
                     ),
                   ),

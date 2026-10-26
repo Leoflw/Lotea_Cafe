@@ -1,14 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import '../../models/coffee_lot.dart';
+import '../../data/mock_store.dart';
 import '../../models/favorite.dart';
-import '../../models/seller_profile.dart';
-import '../../repositories/coffee_lot_repository.dart';
-import '../../repositories/favorite_repository.dart';
-import '../../repositories/seller_repository.dart';
-import '../../state/activity_provider.dart';
-import '../../state/session_provider.dart';
-import '../../widgets/remote_view.dart';
+import '../../services/session_provider.dart';
 import '../../theme/app_theme.dart';
 import '../../utils/format_utils.dart';
 import '../../widgets/app_image.dart';
@@ -26,48 +20,18 @@ class CoffeeLotDetailScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final lots = context.read<CoffeeLotRepository>();
-    return StreamView<CoffeeLot?>(
-      crear: () => lots.observar(coffeeLotId),
-      builder: (context, lote) {
-        if (lote == null) {
-          return Scaffold(appBar: AppBar(), body: const EmptyState(icono: Icons.error_outline, titulo: 'Café no encontrado'));
-        }
-        return _ConVendedor(lote: lote);
-      },
-    );
-  }
-}
-
-/// Lee el perfil del vendedor del lote; si falla o no existe, el detalle del
-/// café se muestra igual (solo sin la sección de origen).
-class _ConVendedor extends StatelessWidget {
-  final CoffeeLot lote;
-  const _ConVendedor({required this.lote});
-
-  @override
-  Widget build(BuildContext context) {
-    final sellers = context.read<SellerRepository>();
-    return StreamBuilder<SellerProfile?>(
-      stream: sellers.observar(lote.sellerId),
-      builder: (context, snap) => _Detalle(lote: lote, vendedor: snap.data),
-    );
-  }
-}
-
-class _Detalle extends StatelessWidget {
-  final CoffeeLot lote;
-  final SellerProfile? vendedor;
-  const _Detalle({required this.lote, required this.vendedor});
-
-  @override
-  Widget build(BuildContext context) {
-    final actividad = context.watch<ActivityProvider>();
+    final store = context.watch<MockStore>();
     final session = context.read<SessionProvider>();
-    final vendedor = this.vendedor;
+    final lote = store.lotePorId(coffeeLotId);
+
+    if (lote == null) {
+      return const Scaffold(body: EmptyState(icono: Icons.error_outline, titulo: 'Café no encontrado'));
+    }
+
+    final vendedor = store.perfilVendedorPorId(lote.sellerId);
     final esGuardado = session.usuario != null &&
         !session.esVendedor &&
-        actividad.esFavorito(TipoFavorito.cafe, lote.id);
+        store.esFavorito(compradorId: session.usuario!.uid, tipo: TipoFavorito.cafe, refId: lote.id);
 
     return Scaffold(
       appBar: AppBar(
@@ -77,18 +41,7 @@ class _Detalle extends StatelessWidget {
             IconButton(
               icon: Icon(esGuardado ? Icons.bookmark : Icons.bookmark_border),
               tooltip: 'Guardar café',
-              onPressed: () async {
-                try {
-                  await context.read<FavoriteRepository>().alternar(
-                        compradorId: session.usuario!.uid,
-                        tipo: TipoFavorito.cafe,
-                        refId: lote.id,
-                        yaEsFavorito: esGuardado,
-                      );
-                } catch (e) {
-                  if (context.mounted) mostrarError(context, e);
-                }
-              },
+              onPressed: () => store.alternarFavorito(compradorId: session.usuario!.uid, tipo: TipoFavorito.cafe, refId: lote.id),
             ),
         ],
       ),
@@ -245,7 +198,7 @@ class _Detalle extends StatelessWidget {
                 child: ElevatedButton.icon(
                   icon: const Icon(Icons.handshake_outlined),
                   label: const Text('Solicitar contacto — Me interesa'),
-                  onPressed: () => mostrarDialogoInteres(context: context, lote: lote),
+                  onPressed: () => mostrarDialogoInteres(context: context, lote: lote, compradorId: session.usuario!.uid),
                 ),
               ),
             )

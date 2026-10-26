@@ -4,16 +4,23 @@ import 'package:provider/provider.dart';
 import 'package:uuid/uuid.dart';
 import '../../data/mock_store.dart';
 import '../../models/chat_message.dart';
+import '../../models/coffee_lot.dart';
+import '../../models/interest_request.dart';
 import '../../services/session_provider.dart';
 import '../../theme/app_theme.dart';
+import '../../utils/format_utils.dart';
+import '../../widgets/app_image.dart';
+import '../coffee/coffee_lot_detail_screen.dart';
+import 'quote_request_screen.dart';
 
-/// Chat privado entre comprador y vendedor tras el match. Mensajes viven
-/// en el MockStore (memoria); se reconstruye automáticamente al enviar.
+/// Chat comercial dentro de una conexión ya aceptada. Cabecera con
+/// contexto (vendedor, café, precio) y acciones explícitas [Ver café] /
+/// [Solicitar cotización] — sección 19, 2ª ronda. No implementa pagos.
 class ChatScreen extends StatefulWidget {
-  final String chatId;
+  final String interestRequestId;
   final String otroNombre;
 
-  const ChatScreen({super.key, required this.chatId, required this.otroNombre});
+  const ChatScreen({super.key, required this.interestRequestId, required this.otroNombre});
 
   @override
   State<ChatScreen> createState() => _ChatScreenState();
@@ -38,35 +45,32 @@ class _ChatScreenState extends State<ChatScreen> {
     _textCtrl.clear();
 
     context.read<MockStore>().enviarMensaje(
-          ChatMessage(
-            id: _uuid.v4(),
-            chatId: widget.chatId,
-            senderId: uid,
-            texto: texto,
-          ),
+          ChatMessage(id: _uuid.v4(), chatId: widget.interestRequestId, senderId: uid, texto: texto),
         );
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (_scrollCtrl.hasClients) {
-        _scrollCtrl.jumpTo(_scrollCtrl.position.maxScrollExtent);
-      }
+      if (_scrollCtrl.hasClients) _scrollCtrl.jumpTo(_scrollCtrl.position.maxScrollExtent);
     });
   }
 
   @override
   Widget build(BuildContext context) {
+    final store = context.watch<MockStore>();
     final miUid = context.read<SessionProvider>().usuario!.uid;
-    final mensajes = context.watch<MockStore>().mensajesDeChat(widget.chatId);
+    final conexion = store.solicitudPorId(widget.interestRequestId);
+    final lote = conexion != null ? store.lotePorId(conexion.coffeeLotId) : null;
+    final mensajes = store.mensajesDeChat(widget.interestRequestId);
 
     return Scaffold(
       appBar: AppBar(title: Text(widget.otroNombre)),
       body: Column(
         children: [
+          if (lote != null) _EncabezadoComercial(lote: lote, conexion: conexion!),
           Expanded(
             child: mensajes.isEmpty
                 ? Center(
                     child: Text(
-                      'Aún no hay mensajes.\n¡Saluda y empieza a negociar tu compra!',
+                      'Conexión comercial establecida.\n¡Saluda y empieza a negociar!',
                       textAlign: TextAlign.center,
                       style: TextStyle(color: Colors.grey.shade500),
                     ),
@@ -77,8 +81,7 @@ class _ChatScreenState extends State<ChatScreen> {
                     itemCount: mensajes.length,
                     itemBuilder: (context, i) {
                       final m = mensajes[i];
-                      final esMio = m.senderId == miUid;
-                      return _Burbuja(mensaje: m, esMio: esMio);
+                      return _Burbuja(mensaje: m, esMio: m.senderId == miUid);
                     },
                   ),
           ),
@@ -96,10 +99,7 @@ class _ChatScreenState extends State<ChatScreen> {
                       decoration: InputDecoration(
                         hintText: 'Escribe un mensaje…',
                         contentPadding: const EdgeInsets.symmetric(horizontal: 16),
-                        border: OutlineInputBorder(
-                          borderRadius: BorderRadius.circular(24),
-                          borderSide: BorderSide.none,
-                        ),
+                        border: OutlineInputBorder(borderRadius: BorderRadius.circular(24), borderSide: BorderSide.none),
                         filled: true,
                         fillColor: Colors.white,
                       ),
@@ -108,14 +108,72 @@ class _ChatScreenState extends State<ChatScreen> {
                   const SizedBox(width: 8),
                   CircleAvatar(
                     backgroundColor: AppColors.coffeeMedium,
-                    child: IconButton(
-                      icon: const Icon(Icons.send, color: Colors.white, size: 20),
-                      onPressed: _enviar,
-                    ),
+                    child: IconButton(icon: const Icon(Icons.send, color: Colors.white, size: 20), onPressed: _enviar),
                   ),
                 ],
               ),
             ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class _EncabezadoComercial extends StatelessWidget {
+  final CoffeeLot lote;
+  final InterestRequest conexion;
+  const _EncabezadoComercial({required this.lote, required this.conexion});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      color: AppColors.coffeeLight.withOpacity(0.35),
+      padding: const EdgeInsets.fromLTRB(14, 10, 14, 10),
+      child: Column(
+        children: [
+          Row(
+            children: [
+              AppImage(
+                path: lote.fotos.isEmpty ? null : lote.fotos.first,
+                width: 40,
+                height: 40,
+                borderRadius: BorderRadius.circular(10),
+                ampliable: false,
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(lote.nombre, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13), overflow: TextOverflow.ellipsis),
+                    Text(formatCOPPorUnidad(lote.precioCOP, lote.unidad), style: const TextStyle(fontSize: 12, color: AppColors.coffeeDark)),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              Expanded(
+                child: OutlinedButton.icon(
+                  onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => CoffeeLotDetailScreen(coffeeLotId: lote.id))),
+                  icon: const Icon(Icons.coffee_outlined, size: 16),
+                  label: const Text('Ver café', style: TextStyle(fontSize: 12.5)),
+                  style: OutlinedButton.styleFrom(minimumSize: const Size.fromHeight(36)),
+                ),
+              ),
+              const SizedBox(width: 8),
+              Expanded(
+                child: ElevatedButton.icon(
+                  onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => QuoteRequestScreen(conexion: conexion))),
+                  icon: const Icon(Icons.request_quote_outlined, size: 16),
+                  label: const Text('Cotizar', style: TextStyle(fontSize: 12.5)),
+                  style: ElevatedButton.styleFrom(minimumSize: const Size.fromHeight(36)),
+                ),
+              ),
+            ],
           ),
         ],
       ),
@@ -149,18 +207,9 @@ class _Burbuja extends StatelessWidget {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.end,
           children: [
-            Text(
-              mensaje.texto,
-              style: TextStyle(color: esMio ? Colors.white : AppColors.coffeeDark),
-            ),
+            Text(mensaje.texto, style: TextStyle(color: esMio ? Colors.white : AppColors.coffeeDark)),
             const SizedBox(height: 2),
-            Text(
-              DateFormat.Hm().format(mensaje.timestamp),
-              style: TextStyle(
-                fontSize: 10,
-                color: esMio ? Colors.white70 : Colors.grey,
-              ),
-            ),
+            Text(DateFormat.Hm().format(mensaje.timestamp), style: TextStyle(fontSize: 10, color: esMio ? Colors.white70 : Colors.grey)),
           ],
         ),
       ),

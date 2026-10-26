@@ -24,7 +24,7 @@ class CafeMatchApp extends StatelessWidget {
         ),
       ],
       child: MaterialApp(
-        title: 'CaféMatch (pruebas)',
+        title: 'CaféMatch — Marketplace de café',
         debugShowCheckedModeBanner: false,
         theme: AppTheme.light(),
         home: const LoginScreen(),

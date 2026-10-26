@@ -1,23 +1,18 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import '../data/mock_store.dart';
 import '../models/coffee_lot.dart';
-import '../repositories/interest_request_repository.dart';
-import '../repositories/repo_exception.dart';
-import '../services/home_tab_notifier.dart';
-import '../state/session_provider.dart';
 import '../theme/app_theme.dart';
-import '../utils/focus_utils.dart';
 
-/// Confirma y envía una solicitud de contacto ("Me interesa"). Devuelve
-/// `true` si la solicitud se envió, `false` si el usuario canceló o ya
-/// existía una — así el swipe puede deshacer la tarjeta cuando no se envió.
-/// Tras enviar muestra una confirmación breve con acción "Ver solicitudes"
-/// que lleva a la pestaña Solicitudes (sin abrir rutas paralelas).
-Future<bool> mostrarDialogoInteres({
+/// Diálogo de confirmación de interés comercial ("Me interesa"). Crea la
+/// [InterestRequest] correspondiente y explica el siguiente paso con
+/// lenguaje comercial (nunca de citas). Si ya existe una solicitud para
+/// el mismo café, avisa en vez de duplicarla (sección 14, 2ª ronda).
+Future<void> mostrarDialogoInteres({
   required BuildContext context,
   required CoffeeLot lote,
+  required String compradorId,
 }) async {
-  liberarFoco();
   final confirmar = await showDialog<bool>(
     context: context,
     builder: (context) => AlertDialog(
@@ -30,7 +25,6 @@ Future<bool> mostrarDialogoInteres({
       actions: [
         TextButton(onPressed: () => Navigator.pop(context, false), child: const Text('Cancelar')),
         ElevatedButton(
-          style: ElevatedButton.styleFrom(minimumSize: const Size(0, 44)),
           onPressed: () => Navigator.pop(context, true),
           child: const Text('Me interesa'),
         ),
@@ -38,44 +32,21 @@ Future<bool> mostrarDialogoInteres({
     ),
   );
 
-  if (confirmar != true || !context.mounted) return false;
-
-  // Se capturan antes del await/snackbar: el contexto puede desmontarse
-  // (p. ej. al cerrar el detalle) antes de que se pulse la acción.
-  final messenger = ScaffoldMessenger.of(context);
-  final navigator = Navigator.of(context);
-  final tabs = context.read<HomeTabNotifier>();
-  final repo = context.read<InterestRequestRepository>();
-  final comprador = context.read<SessionProvider>().usuario;
-  if (comprador == null) return false;
+  if (confirmar != true || !context.mounted) return;
 
   try {
-    // Solo se muestra «Solicitud enviada» cuando Firestore la confirmó.
-    await repo.crear(comprador: comprador, lote: lote);
-  } on RepoException catch (e) {
-    messenger.hideCurrentSnackBar();
-    messenger.showSnackBar(SnackBar(
-      content: Text(e.mensaje),
-      backgroundColor: e.tipo == RepoErrorKind.duplicado ? AppColors.coffeeMedium : AppColors.danger,
-    ));
-    return false;
-  }
-
-  messenger.hideCurrentSnackBar();
-  messenger.showSnackBar(
-    SnackBar(
-      content: const Text('Solicitud enviada'),
-      backgroundColor: AppColors.leafGreen,
-      duration: const Duration(seconds: 4),
-      action: SnackBarAction(
-        label: 'Ver solicitudes',
-        textColor: Colors.white,
-        onPressed: () {
-          navigator.popUntil((r) => r.isFirst);
-          tabs.ir(1);
-        },
+    context.read<MockStore>().crearSolicitud(compradorId: compradorId, lote: lote);
+    if (!context.mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Solicitud enviada. Te avisaremos cuando el vendedor responda.'),
+        backgroundColor: AppColors.leafGreen,
       ),
-    ),
-  );
-  return true;
+    );
+  } on DuplicateRequestException catch (e) {
+    if (!context.mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text(e.mensaje), backgroundColor: AppColors.coffeeMedium),
+    );
+  }
 }

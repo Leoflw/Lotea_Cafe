@@ -73,13 +73,13 @@ class _LoginScreenState extends State<LoginScreen> {
             key: _formKey,
             child: ListView(
               children: [
-                const SizedBox(height: 40),
-                const Icon(Icons.coffee, size: 56, color: AppColors.coffeeMedium),
+                const SizedBox(height: 36),
+                const Icon(Icons.agriculture_outlined, size: 52, color: AppColors.coffeeMedium),
                 const SizedBox(height: 12),
                 Text('CaféMatch', style: Theme.of(context).textTheme.headlineSmall),
                 const SizedBox(height: 4),
                 Text(
-                  'Build de pruebas — datos en memoria, sin servidor.',
+                  'Marketplace de café — conecta productores y compradores.',
                   style: TextStyle(color: Colors.grey.shade600, fontSize: 13),
                 ),
                 const SizedBox(height: 28),
@@ -90,8 +90,7 @@ class _LoginScreenState extends State<LoginScreen> {
                     labelText: 'Correo electrónico',
                     prefixIcon: Icon(Icons.email_outlined),
                   ),
-                  validator: (v) =>
-                      (v == null || !v.contains('@')) ? 'Correo inválido' : null,
+                  validator: (v) => (v == null || !v.contains('@')) ? 'Correo inválido' : null,
                 ),
                 const SizedBox(height: 14),
                 TextFormField(
@@ -101,24 +100,18 @@ class _LoginScreenState extends State<LoginScreen> {
                     labelText: 'Contraseña',
                     prefixIcon: Icon(Icons.lock_outline),
                   ),
-                  validator: (v) => (v == null || v.length < 6)
-                      ? 'Mínimo 6 caracteres'
-                      : null,
+                  validator: (v) => (v == null || v.length < 6) ? 'Mínimo 6 caracteres' : null,
                 ),
                 if (_error != null) ...[
                   const SizedBox(height: 12),
                   Text(_error!, style: const TextStyle(color: AppColors.danger)),
                 ],
                 const SizedBox(height: 20),
-                ElevatedButton(
-                  onPressed: _iniciarSesion,
-                  child: const Text('Iniciar sesión'),
-                ),
+                ElevatedButton(onPressed: _iniciarSesion, child: const Text('Iniciar sesión')),
                 const SizedBox(height: 10),
                 OutlinedButton(
-                  onPressed: () => Navigator.of(context).push(
-                    MaterialPageRoute(builder: (_) => const RegisterScreen()),
-                  ),
+                  onPressed: () => Navigator.of(context)
+                      .push(MaterialPageRoute(builder: (_) => const RegisterScreen())),
                   child: const Text('Crear cuenta nueva'),
                 ),
                 const SizedBox(height: 24),
@@ -126,15 +119,14 @@ class _LoginScreenState extends State<LoginScreen> {
                   Expanded(child: Divider(color: Colors.grey.shade300)),
                   Padding(
                     padding: const EdgeInsets.symmetric(horizontal: 10),
-                    child: Text('o para probar rápido',
-                        style: TextStyle(color: Colors.grey.shade500, fontSize: 12)),
+                    child: Text('o para probar rápido', style: TextStyle(color: Colors.grey.shade500, fontSize: 12)),
                   ),
                   Expanded(child: Divider(color: Colors.grey.shade300)),
                 ]),
                 const SizedBox(height: 16),
                 OutlinedButton.icon(
                   onPressed: _accesoRapidoComprador,
-                  icon: const Icon(Icons.flash_on, color: AppColors.leafGreen),
+                  icon: const Icon(Icons.travel_explore_outlined, color: AppColors.leafGreen),
                   label: const Text('Entrar como comprador demo'),
                   style: OutlinedButton.styleFrom(
                     side: const BorderSide(color: AppColors.leafGreen),

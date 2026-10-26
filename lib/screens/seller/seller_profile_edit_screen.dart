@@ -2,19 +2,10 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:provider/provider.dart';
+import '../../data/mock_store.dart';
 import '../../models/seller_profile.dart';
-import '../../repositories/image_repository.dart';
-import '../../repositories/repo_exception.dart';
-import '../../repositories/seller_repository.dart';
-import '../../services/photo_sync.dart';
-import '../../state/activity_provider.dart';
-import '../../state/session_provider.dart';
-import '../../utils/image_source.dart';
-import '../../widgets/remote_view.dart' show mostrarError;
+import '../../services/session_provider.dart';
 import '../../theme/app_theme.dart';
-import '../../utils/focus_utils.dart';
-import '../../utils/image_validation.dart';
-import '../../widgets/dismiss_keyboard.dart';
 import '../../widgets/app_image.dart';
 
 /// Edición del perfil de MARCA/finca del vendedor — separado de sus cafés
@@ -40,9 +31,6 @@ class _SellerProfileEditScreenState extends State<SellerProfileEditScreen> {
   final _telefonoCtrl = TextEditingController();
 
   String? _fotoPrincipal;
-  final Map<String, String> _idsPorUrl = {}; // URL ya subida → fileId de ImageKit
-  bool _guardando = false;
-  String? _progreso;
   final List<String> _galeria = [];
   String _departamentoSel = departamentosColombia.first;
   String? _tipoProduccion;
@@ -74,8 +62,9 @@ class _SellerProfileEditScreenState extends State<SellerProfileEditScreen> {
   }
 
   void _cargar() {
-    final remoto = context.read<ActivityProvider>().perfilVendedor;
-    final perfil = remoto.listo ? remoto.data : null;
+    final store = context.read<MockStore>();
+    final uid = context.read<SessionProvider>().usuario!.uid;
+    final perfil = store.obtenerPerfilVendedor(uid);
     if (perfil != null) {
       _actual = perfil;
       _marcaCtrl.text = perfil.nombreMarca;
@@ -87,162 +76,62 @@ class _SellerProfileEditScreenState extends State<SellerProfileEditScreen> {
       _telefonoCtrl.text = perfil.telefonoContacto ?? '';
       _fotoPrincipal = perfil.fotoPrincipal;
       _galeria.addAll(perfil.galeria);
-      if (perfil.fotoPrincipal != null && perfil.fotoPrincipalStoragePath != null) {
-        _idsPorUrl[perfil.fotoPrincipal!] = perfil.fotoPrincipalStoragePath!;
-      }
-      for (var i = 0; i < perfil.galeria.length && i < perfil.galeriaStoragePaths.length; i++) {
-        _idsPorUrl[perfil.galeria[i]] = perfil.galeriaStoragePaths[i];
-      }
       _departamentoSel = perfil.departamento;
       _tipoProduccion = perfil.tipoProduccion;
     }
     setState(() {});
   }
 
-  static const _maxGaleria = 12; // mismo límite que firestore.rules
-
-  /// Valida tipo y tamaño de la foto elegida. Devuelve `false` y avisa si no
-  /// es válida.
-  Future<bool> _validarArchivo(String ruta) async {
-    try {
-      ImageValidation.validar(await File(ruta).readAsBytes());
-      return true;
-    } on RepoException catch (e) {
-      if (mounted) mostrarError(context, e);
-    } on FileSystemException {
-      if (mounted) {
-        mostrarError(context, const RepoException(RepoErrorKind.otro, 'No se pudo leer la imagen seleccionada.'));
-      }
-    }
-    return false;
-  }
-
   Future<void> _elegirFotoPrincipal() async {
-    final archivo = await _picker.pickImage(
-      source: ImageSource.gallery,
-      imageQuality: ImageValidation.pickerQuality,
-      maxWidth: ImageValidation.pickerMaxSide,
-      maxHeight: ImageValidation.pickerMaxSide,
-    );
-    if (archivo == null || !await _validarArchivo(archivo.path)) return;
-    if (mounted) setState(() => _fotoPrincipal = archivo.path);
+    final archivo = await _picker.pickImage(source: ImageSource.gallery, imageQuality: 85);
+    if (archivo != null) setState(() => _fotoPrincipal = archivo.path);
   }
 
   Future<void> _agregarGaleria() async {
-    final archivos = await _picker.pickMultiImage(
-      imageQuality: ImageValidation.pickerQuality,
-      maxWidth: ImageValidation.pickerMaxSide,
-      maxHeight: ImageValidation.pickerMaxSide,
-    );
-    if (archivos.isEmpty) return;
-    final aceptadas = <String>[];
-    for (final x in archivos) {
-      if (_galeria.length + aceptadas.length >= _maxGaleria) {
-        if (mounted) {
-          mostrarError(context, const RepoException(RepoErrorKind.validacion, 'Máximo $_maxGaleria fotos en la galería.'));
-        }
-        break;
-      }
-      if (await _validarArchivo(x.path)) aceptadas.add(x.path);
+    final archivos = await _picker.pickMultiImage(imageQuality: 80);
+    if (archivos.isNotEmpty) {
+      setState(() => _galeria.addAll(archivos.map((x) => x.path)));
     }
-    if (mounted && aceptadas.isNotEmpty) setState(() => _galeria.addAll(aceptadas));
   }
 
-  Future<void> _guardar() async {
-    if (_guardando || !_formKey.currentState!.validate()) return;
+  void _guardar() {
+    if (!_formKey.currentState!.validate()) return;
+    final store = context.read<MockStore>();
     final usuario = context.read<SessionProvider>().usuario!;
-    final imagenes = context.read<ImageRepository>();
-    final vendedores = context.read<SellerRepository>();
-    final navigator = Navigator.of(context);
-    final messenger = ScaffoldMessenger.of(context);
 
-    setState(() {
-      _guardando = true;
-      _progreso = null;
-    });
-    try {
-      // 1) Subir a ImageKit solo las fotos nuevas. Si una falla, no se guarda
-      //    nada; las ya subidas cambian su ruta local por la URL, así el
-      //    reintento no las repite.
-      String? urlPrincipal;
-      String? idPrincipal;
-      if (_fotoPrincipal != null) {
-        final r = await PhotoSync.sincronizar(
-          repo: imagenes,
-          proposito: ImagePurpose.profile,
-          fotos: [_fotoPrincipal!],
-          idsPorUrl: _idsPorUrl,
-          alSubir: (local, url) {
-            if (mounted && _fotoPrincipal == local) setState(() => _fotoPrincipal = url);
-          },
-          alProgresar: (h, t, p) {
-            if (mounted && t > 0) setState(() => _progreso = 'Subiendo foto principal… ${(p * 100).round()}%');
-          },
-        );
-        urlPrincipal = r.urls.first;
-        idPrincipal = r.fileIds.first;
-      }
-      final g = await PhotoSync.sincronizar(
-        repo: imagenes,
-        proposito: ImagePurpose.profile,
-        fotos: _galeria,
-        idsPorUrl: _idsPorUrl,
-        alSubir: (local, url) {
-          if (!mounted) return;
-          setState(() {
-            final i = _galeria.indexOf(local);
-            if (i >= 0) _galeria[i] = url;
-          });
-        },
-        alProgresar: (h, t, p) {
-          if (mounted && t > 0) setState(() => _progreso = 'Subiendo foto ${h + 1} de $t… ${(p * 100).round()}%');
-        },
-      );
-      if (mounted) setState(() => _progreso = 'Guardando perfil…');
+    final perfil = SellerProfile(
+      id: _actual?.id ?? 'perfil_${usuario.uid}',
+      usuarioId: usuario.uid,
+      nombreMarca: _marcaCtrl.text.trim(),
+      fincaPrincipal: _fincaCtrl.text.trim(),
+      fotoPrincipal: _fotoPrincipal,
+      galeria: List.from(_galeria),
+      descripcion: _descripcionCtrl.text.trim(),
+      historia: _historiaCtrl.text.trim(),
+      aniosProduciendo: int.tryParse(_aniosCtrl.text.trim()),
+      tipoProduccion: _tipoProduccion,
+      region: _departamentoSel,
+      departamento: _departamentoSel,
+      municipio: _municipioCtrl.text.trim(),
+      telefonoContacto: _telefonoCtrl.text.trim().isEmpty ? null : _telefonoCtrl.text.trim(),
+      verificado: _actual?.verificado ?? false,
+      calificacionPromedio: _actual?.calificacionPromedio ?? 0,
+      numOperaciones: _actual?.numOperaciones ?? 0,
+      fechaRegistro: _actual?.fechaRegistro,
+    );
 
-      // 2) Guardar el perfil con las URLs remotas (nunca rutas locales).
-      final perfil = SellerProfile(
-        id: usuario.uid,
-        usuarioId: usuario.uid,
-        nombreMarca: _marcaCtrl.text.trim(),
-        fincaPrincipal: _fincaCtrl.text.trim(),
-        fotoPrincipal: urlPrincipal,
-        fotoPrincipalStoragePath: idPrincipal,
-        galeria: g.urls,
-        galeriaStoragePaths: g.fileIds,
-        descripcion: _descripcionCtrl.text.trim(),
-        historia: _historiaCtrl.text.trim(),
-        aniosProduciendo: int.tryParse(_aniosCtrl.text.trim()),
-        tipoProduccion: _tipoProduccion,
-        region: _departamentoSel,
-        departamento: _departamentoSel,
-        municipio: _municipioCtrl.text.trim(),
-        telefonoContacto: _telefonoCtrl.text.trim().isEmpty ? null : _telefonoCtrl.text.trim(),
-      );
-      await vendedores.guardarPerfil(perfil);
+    store.guardarPerfilVendedor(perfil);
+    setState(() => _actual = perfil);
 
-      messenger.showSnackBar(
-        const SnackBar(content: Text('Perfil de vendedor actualizado.'), backgroundColor: AppColors.leafGreen),
-      );
-      liberarFoco();
-      navigator.pop();
-    } on RepoException catch (e) {
-      // Los datos escritos en el formulario se conservan para reintentar.
-      if (mounted) mostrarError(context, e, onReintentar: _guardar);
-    } finally {
-      if (mounted) {
-        setState(() {
-          _guardando = false;
-          _progreso = null;
-        });
-      }
-    }
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Perfil de vendedor actualizado.'), backgroundColor: AppColors.leafGreen),
+    );
+    Navigator.of(context).pop();
   }
 
   @override
   Widget build(BuildContext context) {
-    return DismissKeyboard(
-      child: Scaffold(
+    return Scaffold(
       appBar: AppBar(title: const Text('Perfil de mi marca')),
       body: Form(
         key: _formKey,
@@ -255,7 +144,7 @@ class _SellerProfileEditScreenState extends State<SellerProfileEditScreen> {
                 child: CircleAvatar(
                   radius: 48,
                   backgroundColor: AppColors.coffeeLight,
-                  backgroundImage: _fotoPrincipal != null ? imageProviderFor(_fotoPrincipal!, anchoPx: 320) : null,
+                  backgroundImage: _fotoPrincipal != null ? FileImage(File(_fotoPrincipal!)) : null,
                   child: _fotoPrincipal == null
                       ? const Icon(Icons.add_a_photo_outlined, color: Colors.white, size: 28)
                       : null,
@@ -416,22 +305,10 @@ class _SellerProfileEditScreenState extends State<SellerProfileEditScreen> {
               ),
             ),
             const SizedBox(height: 28),
-            if (_progreso != null) ...[
-              LinearProgressIndicator(color: AppColors.coffeeMedium),
-              const SizedBox(height: 6),
-              Text(_progreso!, style: TextStyle(color: Colors.grey.shade700, fontSize: 12.5)),
-              const SizedBox(height: 8),
-            ],
-            ElevatedButton(
-              onPressed: _guardando ? null : _guardar,
-              child: _guardando
-                  ? const SizedBox(width: 22, height: 22, child: CircularProgressIndicator(strokeWidth: 2.4, color: Colors.white))
-                  : const Text('Guardar perfil'),
-            ),
+            ElevatedButton(onPressed: _guardar, child: const Text('Guardar perfil')),
             const SizedBox(height: 20),
           ],
         ),
-      ),
       ),
     );
   }

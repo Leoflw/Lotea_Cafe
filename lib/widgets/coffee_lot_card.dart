@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import '../data/mock_store.dart';
 import '../models/coffee_lot.dart';
-import '../state/session_provider.dart';
-import '../utils/catalog_logic.dart';
+import '../services/session_provider.dart';
 import '../theme/app_theme.dart';
 import '../utils/format_utils.dart';
 import 'app_image.dart';
@@ -22,10 +22,12 @@ class CoffeeLotCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final store = context.read<MockStore>();
+    final vendedor = store.perfilVendedorPorId(lote.sellerId);
     final session = context.read<SessionProvider>();
     final destacado = session.usuario != null &&
         !session.esVendedor &&
-        CatalogLogic.coincideConPreferencias(lote, session.usuario!);
+        store.coincideConPreferencias(lote, session.usuario!);
 
     return Card(
       margin: const EdgeInsets.only(bottom: 12),
@@ -44,8 +46,8 @@ class CoffeeLotCard extends StatelessWidget {
                     children: [
                       const Icon(Icons.auto_awesome, size: 13, color: AppColors.leafGreen),
                       const SizedBox(width: 4),
-                      const Text('Coincide con tus preferencias',
-                          style: TextStyle(color: AppColors.leafGreen, fontSize: 11, fontWeight: FontWeight.bold)),
+                      Text('Coincide con tus preferencias',
+                          style: const TextStyle(color: AppColors.leafGreen, fontSize: 11, fontWeight: FontWeight.bold)),
                     ],
                   ),
                 ),
@@ -58,7 +60,6 @@ class CoffeeLotCard extends StatelessWidget {
                     width: 84,
                     height: 84,
                     borderRadius: BorderRadius.circular(14),
-                    ampliable: false, // el toque de la tarjeta abre el detalle; ahí se amplía la galería
                   ),
                   const SizedBox(width: 12),
                   Expanded(
@@ -75,7 +76,7 @@ class CoffeeLotCard extends StatelessWidget {
                                 overflow: TextOverflow.ellipsis,
                               ),
                             ),
-                            if (lote.vendedorVerificado)
+                            if (vendedor?.verificado == true)
                               const Padding(
                                 padding: EdgeInsets.only(left: 4),
                                 child: Icon(Icons.verified, size: 15, color: AppColors.leafGreen),
@@ -84,7 +85,7 @@ class CoffeeLotCard extends StatelessWidget {
                         ),
                         const SizedBox(height: 2),
                         Text(
-                          lote.sellerNombreMarca.isNotEmpty ? '${lote.sellerNombreMarca} · ${lote.departamento}' : lote.varietyPrincipal,
+                          vendedor != null ? '${vendedor.nombreMarca} · ${vendedor.departamento}' : lote.varietyPrincipal,
                           style: TextStyle(color: Colors.grey.shade600, fontSize: 12),
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,

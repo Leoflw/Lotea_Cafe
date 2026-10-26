@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
-import '../../utils/focus_utils.dart';
-import '../../models/discover_filters.dart';
+import '../../data/mock_store.dart';
 import '../../models/coffee_lot.dart';
 import '../../models/seller_profile.dart';
 import '../../theme/app_theme.dart';
@@ -9,7 +8,6 @@ import '../../utils/format_utils.dart';
 /// Bottom sheet de filtros ampliado (sección 14 del plan de evolución).
 /// Devuelve un [DiscoverFilters] o null si el usuario cancela.
 Future<DiscoverFilters?> mostrarFiltros(BuildContext context, DiscoverFilters actuales) {
-  liberarFoco();
   var deptos = List<String>.from(actuales.departamentos);
   var variedades = List<String>.from(actuales.variedades);
   var procesos = List<String>.from(actuales.procesos);
@@ -162,14 +160,11 @@ Future<DiscoverFilters?> mostrarFiltros(BuildContext context, DiscoverFilters ac
                           variedades: variedades,
                           procesos: procesos,
                           certificaciones: certs,
-                          // Un rango/valor sin tocar (en su extremo por defecto)
-                          // NO es un filtro: se devuelve null para que el
-                          // contador de filtros activos sea veraz.
-                          precioMinCOP: precioRange.start > 10000 ? precioRange.start : null,
-                          precioMaxCOP: precioRange.end < 100000 ? precioRange.end : null,
-                          altitudMin: altitudRange.start > 900 ? altitudRange.start : null,
-                          altitudMax: altitudRange.end < 2100 ? altitudRange.end : null,
-                          puntajeMin: puntajeMin > 75 ? puntajeMin : null,
+                          precioMinCOP: precioRange.start,
+                          precioMaxCOP: precioRange.end,
+                          altitudMin: altitudRange.start,
+                          altitudMax: altitudRange.end,
+                          puntajeMin: puntajeMin,
                           soloDisponibles: soloDisponibles,
                           soloVerificados: soloVerificados,
                           tipoCafe: tipoCafe,

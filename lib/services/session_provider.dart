@@ -2,9 +2,9 @@ import 'package:flutter/foundation.dart';
 import '../data/mock_store.dart';
 import '../models/app_user.dart';
 
-/// Mantiene en memoria al usuario "autenticado" actual. Al no haber
-/// backend, el registro/login vive en [MockStore] y esta clase solo
-/// guarda la sesión activa mientras la app está abierta.
+/// Mantiene en memoria al usuario "autenticado" actual. El registro/login
+/// vive en [MockStore]; esta clase solo guarda la sesión activa mientras la
+/// app está abierta.
 class SessionProvider extends ChangeNotifier {
   final MockStore store;
   AppUser? _usuario;
@@ -32,6 +32,12 @@ class SessionProvider extends ChangeNotifier {
     _usuario = u;
     notifyListeners();
     return u;
+  }
+
+  void actualizarUsuario(AppUser usuario) {
+    store.actualizarUsuario(usuario);
+    _usuario = usuario;
+    notifyListeners();
   }
 
   void cerrarSesion() {

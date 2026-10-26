@@ -1,27 +1,16 @@
-import '../data/codec.dart';
-
-/// Documento `sellerProfiles/{uid}` — perfil público del vendedor. El id del
-/// documento es el UID del propietario, así `sellerId == usuarioId`.
-///
-/// `verificado`, `calificacionPromedio` y `numOperaciones` NO los puede
-/// escribir el cliente (las reglas lo impiden). Hasta que exista un proceso
-/// real de verificación y de calificaciones, valen `false`, `0` y `0`, y la
-/// interfaz solo los muestra cuando hay datos.
+/// Información del VENDEDOR/marca — separada de sus cafés (ver [CoffeeLot]).
+/// Un vendedor tiene un único SellerProfile pero puede publicar varios lotes.
 class SellerProfile {
-  final String id;
+  final String id; // == usuarioId (relación 1:1 con la cuenta)
   final String usuarioId;
   final String nombreMarca;
   final String fincaPrincipal;
-  final String? fotoPrincipal; // URL pública de ImageKit
-  // `fileId` de ImageKit (el nombre `...StoragePath` se conserva para no cambiar
-  // el esquema ni las reglas de Firestore).
-  final String? fotoPrincipalStoragePath;
-  final List<String> galeria; // URLs públicas de ImageKit
-  final List<String> galeriaStoragePaths; // fileId de cada foto de la galería
+  final String? fotoPrincipal; // ruta local
+  final List<String> galeria; // fotos de finca, cafetal, proceso, empaque...
   final String descripcion;
-  final String historia;
+  final String historia; // "Sobre el productor"
   final int? aniosProduciendo;
-  final String? tipoProduccion;
+  final String? tipoProduccion; // familiar, cooperativa, tecnificada...
   final String region;
   final String departamento;
   final String municipio;
@@ -29,18 +18,15 @@ class SellerProfile {
   final bool verificado;
   final double calificacionPromedio;
   final int numOperaciones;
-  final DateTime? fechaRegistro;
-  final DateTime? updatedAt;
+  final DateTime fechaRegistro;
 
-  const SellerProfile({
+  SellerProfile({
     required this.id,
     required this.usuarioId,
     required this.nombreMarca,
     required this.fincaPrincipal,
     this.fotoPrincipal,
-    this.fotoPrincipalStoragePath,
     this.galeria = const [],
-    this.galeriaStoragePaths = const [],
     this.descripcion = '',
     this.historia = '',
     this.aniosProduciendo,
@@ -52,28 +38,20 @@ class SellerProfile {
     this.verificado = false,
     this.calificacionPromedio = 0.0,
     this.numOperaciones = 0,
-    this.fechaRegistro,
-    this.updatedAt,
-  });
+    DateTime? fechaRegistro,
+  }) : fechaRegistro = fechaRegistro ?? DateTime.now();
 
   String get ubicacionCorta =>
       municipio.isNotEmpty ? '$municipio, $departamento' : '$region, $departamento';
 
   bool get perfilCompleto =>
-      nombreMarca.isNotEmpty &&
-      fincaPrincipal.isNotEmpty &&
-      descripcion.isNotEmpty &&
-      historia.isNotEmpty;
-
-  bool get tieneCalificaciones => numOperaciones > 0 && calificacionPromedio > 0;
+      descripcion.isNotEmpty && historia.isNotEmpty && galeria.isNotEmpty;
 
   SellerProfile copyWith({
     String? nombreMarca,
     String? fincaPrincipal,
     String? fotoPrincipal,
-    String? fotoPrincipalStoragePath,
     List<String>? galeria,
-    List<String>? galeriaStoragePaths,
     String? descripcion,
     String? historia,
     int? aniosProduciendo,
@@ -89,9 +67,7 @@ class SellerProfile {
       nombreMarca: nombreMarca ?? this.nombreMarca,
       fincaPrincipal: fincaPrincipal ?? this.fincaPrincipal,
       fotoPrincipal: fotoPrincipal ?? this.fotoPrincipal,
-      fotoPrincipalStoragePath: fotoPrincipalStoragePath ?? this.fotoPrincipalStoragePath,
       galeria: galeria ?? this.galeria,
-      galeriaStoragePaths: galeriaStoragePaths ?? this.galeriaStoragePaths,
       descripcion: descripcion ?? this.descripcion,
       historia: historia ?? this.historia,
       aniosProduciendo: aniosProduciendo ?? this.aniosProduciendo,
@@ -104,57 +80,11 @@ class SellerProfile {
       calificacionPromedio: calificacionPromedio,
       numOperaciones: numOperaciones,
       fechaRegistro: fechaRegistro,
-      updatedAt: updatedAt,
-    );
-  }
-
-  /// Solo campos que el vendedor puede escribir.
-  Map<String, dynamic> toEditableMap() => {
-        'usuarioId': usuarioId,
-        'nombreMarca': nombreMarca,
-        'fincaPrincipal': fincaPrincipal,
-        'fotoPrincipal': fotoPrincipal,
-        'fotoPrincipalStoragePath': fotoPrincipalStoragePath,
-        'galeria': galeria,
-        'galeriaStoragePaths': galeriaStoragePaths,
-        'descripcion': descripcion,
-        'historia': historia,
-        'aniosProduciendo': aniosProduciendo,
-        'tipoProduccion': tipoProduccion,
-        'region': region,
-        'departamento': departamento,
-        'municipio': municipio,
-        'telefonoContacto': telefonoContacto,
-      };
-
-  factory SellerProfile.fromMap(String id, Map<String, dynamic> m) {
-    return SellerProfile(
-      id: id,
-      usuarioId: readString(m['usuarioId']) ?? id,
-      nombreMarca: readString(m['nombreMarca']) ?? '',
-      fincaPrincipal: readString(m['fincaPrincipal']) ?? '',
-      fotoPrincipal: readString(m['fotoPrincipal']),
-      fotoPrincipalStoragePath: readString(m['fotoPrincipalStoragePath']),
-      galeria: readStringList(m['galeria']),
-      galeriaStoragePaths: readStringList(m['galeriaStoragePaths']),
-      descripcion: readString(m['descripcion']) ?? '',
-      historia: readString(m['historia']) ?? '',
-      aniosProduciendo: readInt(m['aniosProduciendo']),
-      tipoProduccion: readString(m['tipoProduccion']),
-      region: readString(m['region']) ?? readString(m['departamento']) ?? '',
-      departamento: readString(m['departamento']) ?? '',
-      municipio: readString(m['municipio']) ?? '',
-      telefonoContacto: readString(m['telefonoContacto']),
-      verificado: m['verificado'] == true,
-      calificacionPromedio: readDouble(m['calificacionPromedio']) ?? 0.0,
-      numOperaciones: readInt(m['numOperaciones']) ?? 0,
-      fechaRegistro: readDate(m['createdAt']),
-      updatedAt: readDate(m['updatedAt']),
     );
   }
 }
 
-/// Departamentos usados en filtros y formularios.
+/// Departamentos usados en filtros y formularios (datos de demo de Colombia).
 const List<String> departamentosColombia = [
   'Huila',
   'Antioquia',
