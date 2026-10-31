@@ -1,0 +1,7 @@
+# Copia este archivo a .dev.vars SOLO para `wrangler dev` en tu computador.
+# .dev.vars está en .gitignore. Valores de EJEMPLO, no reales.
+#
+# IMPORTANTE: aquí NO se escribe la cuenta de servicio. FCM_SERVICE_ACCOUNT_JSON
+# es un secreto que se introduce a mano en Cloudflare (`wrangler secret put`) y
+# no debe guardarse en archivos del proyecto, ZIP, GitHub ni documentación.
+ALLOW_HTTP=true

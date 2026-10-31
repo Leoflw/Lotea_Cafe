@@ -1,0 +1,65 @@
+﻿# Flutter y Dart
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+build/
+.idea/
+*.iml
+.DS_Store
+Thumbs.db
+
+# Android
+android/local.properties
+android/.gradle/
+android/.kotlin/
+*.keystore
+*.jks
+key.properties
+
+# iOS
+ios/Flutter/Flutter.podspec
+ios/Flutter/Generated.xcconfig
+ios/Flutter/ephemeral/
+ios/Pods/
+
+# Configuración local de Firebase
+android/app/google-services.json
+ios/Runner/GoogleService-Info.plist
+lib/firebase_options.dart
+.firebase/
+firebase-debug.log
+firestore-debug.log
+
+# ImageKit
+env.json
+
+# Variables de entorno
+.env
+.env.*
+!.env.example
+!**/.env.example
+
+# Cloudflare
+**/.dev.vars
+**/.dev.vars.*
+!**/.dev.vars.example
+**/node_modules/
+**/.wrangler/
+
+# Cuentas de servicio y claves privadas
+*service-account*.json
+*serviceAccount*.json
+*-firebase-adminsdk-*.json
+*.pem
+*.p12
+*.pfx
+*.p8
+
+# Archivos generados
+*.log
+coverage/
+
+
+# Informes internos de correcciones y desarrollo
+INFORME_CORRECCION_*.md

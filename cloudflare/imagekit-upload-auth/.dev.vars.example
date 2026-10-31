@@ -1,0 +1,5 @@
+# Copia este archivo a .dev.vars SOLO para `wrangler dev` en tu computador.
+# .dev.vars está en .gitignore. Estos valores son de EJEMPLO, no reales.
+IMAGEKIT_PRIVATE_KEY=private_EJEMPLO_NO_REAL=
+# Permite http://localhost durante `wrangler dev` (nunca en producción)
+ALLOW_HTTP=true

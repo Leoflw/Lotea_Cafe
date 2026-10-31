@@ -1,0 +1,18 @@
+{
+  "name": "lotea-cafe-rules-tests",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Pruebas de firestore.rules contra el EMULADOR de Firestore (no usan fake_cloud_firestore).",
+  "scripts": {
+    "test": "firebase emulators:exec --only firestore --project lotea-cafe-test \"node --test --test-concurrency=1\""
+  },
+  "devDependencies": {
+    "@firebase/rules-unit-testing": "^3.0.4",
+    "firebase": "^10.14.1"
+  },
+  "overrides": {
+    "@grpc/grpc-js": "1.14.7",
+    "undici": "6.29.1"
+  }
+}

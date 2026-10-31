@@ -1,0 +1,16 @@
+{
+  "name": "push-notifications",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Cloudflare Worker (plan gratuito) que envía las notificaciones push de Lotea Café por FCM HTTP v1. Independiente del Worker de ImageKit.",
+  "type": "module",
+  "scripts": {
+    "test": "node --test",
+    "medir-cpu": "node scripts/medir-cpu.mjs",
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "wrangler": "^4.0.0"
+  }
+}
