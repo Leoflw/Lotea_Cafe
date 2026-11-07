@@ -1,0 +1,61 @@
+name: lotea_cafe
+description: "Lotea Café — marketplace móvil de café colombiano. Descubre. Compara. Conecta."
+publish_to: "none"
+version: 0.5.0
+
+environment:
+  sdk: ">=3.3.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+
+  # Estado de la UI
+  provider: ^6.1.2
+
+  # Firebase (Auth y Firestore). Las fotos ya NO usan Cloud Storage: se suben
+  # a ImageKit (ver IMAGEKIT_SETUP.md). Versiones de referencia: ejecuta
+  # `flutter pub get`; si tu SDK de Flutter exige otras, usa
+  # `flutter pub upgrade --major-versions` y revisa FIREBASE_SETUP.md.
+  firebase_core: ^3.6.0
+  firebase_auth: ^5.3.1
+  cloud_firestore: ^5.4.0
+
+  # Notificaciones push (FCM). La línea 15.x es la que acompaña a firebase_core 3.x
+  # (el pubspec.lock fija firebase_core 3.15.2, firebase_auth 5.7.0 y cloud_firestore
+  # 5.6.12). No subas a 16.x sin subir también firebase_core a 4.x. Ver PUSH_NOTIFICATIONS.md.
+  firebase_messaging: ^15.2.10
+
+  # Subida de fotos a ImageKit (HTTPS, multipart/form-data)
+  http: ^1.2.2
+  http_parser: ^4.0.2
+
+  # UI / UX
+  google_fonts: ^6.2.1
+  flutter_card_swiper: ^7.0.1
+  image_picker: ^1.1.2
+  intl: ^0.19.0
+  uuid: ^4.5.1
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^4.0.0
+  flutter_launcher_icons: ^0.14.1
+  fake_cloud_firestore: ^3.0.3 # pruebas de persistencia sin Firebase real
+
+# Regenera los iconos nativos: `dart run flutter_launcher_icons`
+# (ver README.md, sección «Identidad visual»). Los recursos generados ya están
+# incluidos en android/app/src/main/res/.
+flutter_launcher_icons:
+  android: true
+  ios: false
+  image_path: "assets/branding/lotea_cafe_icon.png"
+  adaptive_icon_background: "#FBF3E7"
+  adaptive_icon_foreground: "assets/branding/lotea_cafe_icon_foreground.png"
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/branding/lotea_cafe_symbol.png

@@ -1,0 +1,15 @@
+{
+  "name": "imagekit-upload-auth",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Cloudflare Worker (plan gratuito) que autoriza las subidas de fotos de Lotea Café a ImageKit.",
+  "type": "module",
+  "scripts": {
+    "test": "node --test",
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "wrangler": "^4.0.0"
+  }
+}

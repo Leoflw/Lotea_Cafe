@@ -1,0 +1,65 @@
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+.packages
+build/
+.idea/
+*.iml
+.DS_Store
+android/local.properties
+ios/Flutter/Flutter.podspec
+
+# Firebase / secretos locales (no versionar)
+android/app/google-services.json
+ios/Runner/GoogleService-Info.plist
+lib/firebase_options.dart
+.firebase/
+firebase-debug.log
+*.keystore
+*.jks
+key.properties
+
+# Valores locales de ImageKit para --dart-define-from-file (son públicos, pero propios de cada entorno)
+env.json
+# Cloudflare Worker: secretos locales y dependencias
+cloudflare/imagekit-upload-auth/.dev.vars
+cloudflare/imagekit-upload-auth/node_modules/
+cloudflare/imagekit-upload-auth/.wrangler/
+
+# Cloudflare Worker de notificaciones push: secretos locales y dependencias
+cloudflare/push-notifications/.dev.vars
+cloudflare/push-notifications/node_modules/
+cloudflare/push-notifications/.wrangler/
+# Cuentas de servicio de Google: JAMÁS en el repositorio (el secreto va solo en Cloudflare)
+*service-account*.json
+*serviceAccount*.json
+*-firebase-adminsdk-*.json
+.dev.vars
+.dev.vars.*
+!.dev.vars.example
+rules-tests/node_modules/
+
+# Archivos generados y registros locales
+*.log
+firestore-debug.log
+coverage/
+
+# Cachés adicionales
+android/.gradle/
+android/.kotlin/
+ios/Pods/
+
+# Dependencias de todos los Workers
+**/node_modules/
+**/.wrangler/
+
+# Clave JSON descargada de Google Cloud
+*.pem
+*.p12
+*.pfx
+lotea-cafe-*.json
+
+# Variables de entorno locales
+.env
+.env.*
+!.env.example

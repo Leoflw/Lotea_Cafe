@@ -1,0 +1,18 @@
+# Cloudflare Worker de notificaciones push (FCM) — Lotea Café.
+# Independiente del Worker de ImageKit (cloudflare/imagekit-upload-auth): nombre,
+# código, variables y secretos propios. Plan gratuito de Workers: no necesita
+# KV, R2, D1 ni Durable Objects (la deduplicación vive en Firestore).
+name = "push-notifications"
+main = "src/index.js"
+compatibility_date = "2025-09-01"
+workers_dev = true
+
+# Variables PÚBLICAS (se pueden versionar). Las credenciales NO van aquí.
+# El secreto FCM_SERVICE_ACCOUNT_JSON se guarda SOLO con:
+#   npx wrangler secret put FCM_SERVICE_ACCOUNT_JSON
+# (o desde el panel de Cloudflare: Settings → Variables and Secrets → Secret).
+[vars]
+# ID del proyecto de Firebase (.firebaserc). Solo se aceptan tokens de ESTE proyecto.
+FIREBASE_PROJECT_ID = "lotea-cafe"
+# Canal de notificaciones de Android que crea la app (MainActivity.kt).
+ANDROID_CHANNEL_ID = "lotea_mensajes_cotizaciones"
