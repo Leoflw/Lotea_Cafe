@@ -63,3 +63,8 @@ lotea-cafe-*.json
 .env
 .env.*
 !.env.example
+
+# Archivos generados de iOS y Windows
+Thumbs.db
+ios/Flutter/Generated.xcconfig
+ios/Flutter/ephemeral/
