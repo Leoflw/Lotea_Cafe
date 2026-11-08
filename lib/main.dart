@@ -13,6 +13,7 @@ import 'repositories/seller_repository.dart';
 import 'repositories/user_repository.dart';
 import 'screens/auth/auth_gate.dart';
 import 'screens/config/config_pending_screen.dart';
+import 'services/auth_diag.dart';
 import 'services/firebase_bootstrap.dart';
 import 'services/device_token_service.dart';
 import 'services/home_tab_notifier.dart';
@@ -21,6 +22,7 @@ import 'services/push_destinos.dart';
 import 'services/push_gateway.dart';
 import 'services/push_navigation.dart';
 import 'services/push_notifier.dart';
+import 'services/session_preference.dart';
 import 'state/activity_provider.dart';
 import 'state/session_provider.dart';
 import 'theme/app_theme.dart';
@@ -28,8 +30,16 @@ import 'widgets/push_session_bridge.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  AuthDiag.log('main() inicia');
   final resultado = await FirebaseBootstrap.inicializar();
-  runApp(LoteaCafeApp(inicial: resultado));
+  AuthDiag.log('Firebase inicializado: estado=${resultado.status.name} '
+      'currentUser=${resultado.status == FirebaseInitStatus.listo ? AuthDiag.actualDeFirebase() : 'no_aplica'}');
+  // La preferencia «Mantener sesión iniciada» se lee ANTES de montar la interfaz: así
+  // `SessionProvider` decide con el valor ya cargado y nunca se muestra, ni por un
+  // instante, la pantalla principal de una sesión que debe cerrarse.
+  final preferencia = await PreferenciaSesion.cargar(AlmacenPreferenciaSesionLocal());
+  AuthDiag.log('mantener_sesion leída: valor=${preferencia.mantener}');
+  runApp(LoteaCafeApp(inicial: resultado, preferenciaSesion: preferencia));
 }
 
 /// Raíz de Lotea Café. Si Firebase no está listo muestra la pantalla de
@@ -37,7 +47,11 @@ Future<void> main() async {
 /// repositorios y el control de sesión.
 class LoteaCafeApp extends StatefulWidget {
   final FirebaseInitResult inicial;
-  const LoteaCafeApp({super.key, required this.inicial});
+
+  /// Preferencia ya cargada por `main()`. Sin ella (pruebas) se usa una en memoria con
+  /// el valor por defecto: mantener la sesión.
+  final PreferenciaSesion? preferenciaSesion;
+  const LoteaCafeApp({super.key, required this.inicial, this.preferenciaSesion});
 
   @override
   State<LoteaCafeApp> createState() => _LoteaCafeAppState();
@@ -45,6 +59,7 @@ class LoteaCafeApp extends StatefulWidget {
 
 class _LoteaCafeAppState extends State<LoteaCafeApp> {
   late FirebaseInitResult _resultado = widget.inicial;
+  late final PreferenciaSesion _preferenciaSesion = widget.preferenciaSesion ?? PreferenciaSesion.enMemoria();
 
   Future<void> _reintentar() async {
     final r = await FirebaseBootstrap.inicializar();
@@ -64,6 +79,7 @@ class _LoteaCafeAppState extends State<LoteaCafeApp> {
 
     return MultiProvider(
       providers: [
+        ChangeNotifierProvider<PreferenciaSesion>.value(value: _preferenciaSesion),
         // Notificaciones push: cliente del Worker (solo envía ids), pasarela de FCM y
         // registro de dispositivos. Van ANTES de los repositorios y de la sesión
         // porque estos los usan.
@@ -87,6 +103,10 @@ class _LoteaCafeAppState extends State<LoteaCafeApp> {
             users: c.read<UserRepository>(),
             // Borra el dispositivo de la cuenta que sale ANTES de cerrar su sesión.
             antesDeCerrarSesion: (uid) => c.read<DeviceTokenService>().liberarDispositivo(uid),
+            preferencia: c.read<PreferenciaSesion>(),
+            // Sesión restaurada que se cierra por la preferencia: libera el dispositivo
+            // aunque el registro en memoria esté vacío (arranque en frío).
+            antesDeCerrarSesionRestaurada: (uid) => c.read<DeviceTokenService>().liberarDispositivoDeSesionRestaurada(uid),
           ),
         ),
         // Qué hacer al recibir o tocar una notificación (abre ChatScreen / QuoteDetailScreen).

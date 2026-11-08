@@ -1,4 +1,5 @@
 import 'package:firebase_auth/firebase_auth.dart';
+import '../services/auth_diag.dart';
 import 'repo_exception.dart';
 
 /// Envuelve Firebase Authentication. Las contraseñas solo pasan por aquí
@@ -36,7 +37,13 @@ class AuthRepository {
     }
   }
 
-  Future<void> cerrarSesion() => _auth.signOut();
+  Future<void> cerrarSesion() async {
+    AuthDiag.signOutsDeLaApp++;
+    AuthDiag.log('FirebaseAuth.signOut() INVOCADO por la app (llamada n.º ${AuthDiag.signOutsDeLaApp}) '
+        'currentUser=${AuthDiag.actualNulo(() => _auth.currentUser)}');
+    await _auth.signOut();
+    AuthDiag.log('FirebaseAuth.signOut() TERMINÓ currentUser=${AuthDiag.actualNulo(() => _auth.currentUser)}');
+  }
 
   Future<void> enviarRecuperacion(String email) async {
     try {

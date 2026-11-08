@@ -5,6 +5,8 @@ import '../models/app_user.dart';
 import '../repositories/auth_repository.dart';
 import '../repositories/repo_exception.dart';
 import '../repositories/user_repository.dart';
+import '../services/auth_diag.dart';
+import '../services/session_preference.dart';
 
 enum SessionStatus {
   /// Esperando a que Firebase restaure (o descarte) la sesión guardada.
@@ -38,6 +40,23 @@ class SessionProvider extends ChangeNotifier {
   /// Un fallo o una demora aquí nunca impide cerrar sesión.
   final Future<void> Function(String uid)? _antesDeCerrarSesion;
 
+  /// «Mantener sesión iniciada» (por dispositivo). Sin preferencia se comporta como
+  /// siempre: la sesión que Firebase restaura se conserva.
+  final PreferenciaSesion? _preferencia;
+
+  /// Igual que [_antesDeCerrarSesion], pero para una sesión RESTAURADA al abrir la app
+  /// (arranque en frío) que se cierra porque la preferencia está desactivada. Un fallo o
+  /// una demora aquí nunca impide cerrar la sesión.
+  final Future<void> Function(String uid)? _antesDeCerrarSesionRestaurada;
+
+  /// Solo el PRIMER evento de autenticación del proceso corresponde a una sesión
+  /// restaurada; cualquier inicio de sesión posterior es una acción de la persona.
+  bool _primerEventoDeAutenticacion = true;
+
+  /// Usuario cuya sesión restaurada se está cerrando (o falló al cerrarse).
+  User? _cierreRestauradoPendiente;
+  bool _cerrado = false;
+
   StreamSubscription<User?>? _authSub;
   StreamSubscription<AppUser?>? _userSub;
 
@@ -52,10 +71,17 @@ class SessionProvider extends ChangeNotifier {
     required AuthRepository auth,
     required UserRepository users,
     Future<void> Function(String uid)? antesDeCerrarSesion,
+    PreferenciaSesion? preferencia,
+    Future<void> Function(String uid)? antesDeCerrarSesionRestaurada,
   })  : _auth = auth,
         _users = users,
-        _antesDeCerrarSesion = antesDeCerrarSesion {
+        _antesDeCerrarSesion = antesDeCerrarSesion,
+        _preferencia = preferencia,
+        _antesDeCerrarSesionRestaurada = antesDeCerrarSesionRestaurada {
+    AuthDiag.log('SessionProvider creado: currentUser=${AuthDiag.actualNulo(() => _auth.usuarioActual)} '
+        'mantener_sesion=${AuthDiag.booleano(_preferencia?.mantener)} estado_inicial=${_status.name}');
     _authSub = _auth.authStateChanges.listen(_alCambiarAuth, onError: (Object e) {
+      AuthDiag.log('authStateChanges ERROR tipo=${AuthDiag.tipo(e)} estado_anterior=${_status.name} estado_nuevo=errorPerfil');
       _error = RepoException.desde(e);
       _status = SessionStatus.errorPerfil;
       notifyListeners();
@@ -72,6 +98,30 @@ class SessionProvider extends ChangeNotifier {
   bool get correoVerificado => _firebaseUser?.emailVerified ?? true;
 
   void _alCambiarAuth(User? user) {
+    // Sesión restaurada con «Mantener sesión iniciada» desactivada: se cierra SIN pasar por
+    // `cargandoPerfil` ni `listo`. El estado se queda en `iniciando` (el splash), así la
+    // pantalla principal nunca se construye y el puente de notificaciones nunca registra
+    // este dispositivo para esa cuenta.
+    final esPrimero = _primerEventoDeAutenticacion;
+    _primerEventoDeAutenticacion = false;
+    final preferencia = _preferencia;
+    final estadoAnterior = _status;
+    AuthDiag.log('authStateChanges evento: primero=$esPrimero user=${user == null ? 'null' : 'no_null'} '
+        'currentUser=${AuthDiag.actualNulo(() => _auth.usuarioActual)} '
+        'comparacion=${AuthDiag.comparar(user, () => _auth.usuarioActual)} '
+        'mantener_sesion=${AuthDiag.booleano(preferencia?.mantener)} '
+        'estado_anterior=${estadoAnterior.name} signOuts_de_la_app=${AuthDiag.signOutsDeLaApp}');
+    if (esPrimero && user != null && preferencia != null && !preferencia.mantener) {
+      AuthDiag.log('decisión: CERRAR sesión restaurada automáticamente, '
+          'razón=primer_evento_con_usuario_y_mantener_sesion=false');
+      unawaited(_cerrarSesionRestaurada(user));
+      return;
+    }
+    if (esPrimero && user != null) {
+      AuthDiag.log('decisión: CONSERVAR sesión restaurada, '
+          'razón=${preferencia == null ? 'sin_preferencia_inyectada' : 'mantener_sesion=true'}');
+    }
+    _cierreRestauradoPendiente = null;
     _firebaseUser = user;
     _userSub?.cancel();
     _userSub = null;
@@ -80,10 +130,12 @@ class SessionProvider extends ChangeNotifier {
       _usuario = null;
       _pendiente = null;
       _status = SessionStatus.sinSesion;
+      AuthDiag.log('estado: ${estadoAnterior.name} -> sinSesion (evento user=null)');
       notifyListeners();
       return;
     }
     _status = SessionStatus.cargandoPerfil;
+    AuthDiag.log('estado: ${estadoAnterior.name} -> cargandoPerfil (evento con usuario)');
     notifyListeners();
     _escucharPerfil(user.uid);
   }
@@ -112,8 +164,44 @@ class SessionProvider extends ChangeNotifier {
     });
   }
 
-  /// Reintenta cargar el perfil tras un error recuperable.
+  Future<void> _cerrarSesionRestaurada(User user) async {
+    _cierreRestauradoPendiente = user;
+    final gancho = _antesDeCerrarSesionRestaurada;
+    if (gancho != null) {
+      try {
+        await gancho(user.uid).timeout(const Duration(seconds: 5));
+      } catch (e) {
+        // Las notificaciones nunca bloquean el cierre de sesión.
+        AuthDiag.log('cierre AUTOMÁTICO: el gancho de dispositivo falló tipo=${AuthDiag.tipo(e)} (no bloquea el cierre)');
+      }
+    }
+    try {
+      AuthDiag.log('signOut AUTOMÁTICO: antes (currentUser=${AuthDiag.actualNulo(() => _auth.usuarioActual)})');
+      await _auth.cerrarSesion();
+      AuthDiag.log('signOut AUTOMÁTICO: después, sin excepción (currentUser=${AuthDiag.actualNulo(() => _auth.usuarioActual)})');
+      // El siguiente evento (usuario nulo) lleva a `sinSesion` y al inicio de sesión.
+    } catch (e) {
+      AuthDiag.log('signOut AUTOMÁTICO: FALLÓ tipo=${AuthDiag.tipo(e)}');
+      if (_cerrado) return;
+      // No se pudo cerrar: nunca se entra a la app con una sesión que debía cerrarse.
+      _firebaseUser = user;
+      _error = const RepoException(RepoErrorKind.otro, 'No se pudo cerrar la sesión guardada. Inténtalo de nuevo.');
+      _status = SessionStatus.errorPerfil;
+      notifyListeners();
+    }
+  }
+
+  /// Reintenta cargar el perfil tras un error recuperable. Si el error fue al cerrar una
+  /// sesión restaurada, reintenta el cierre (no abre la app).
   void reintentarPerfil() {
+    final pendiente = _cierreRestauradoPendiente;
+    if (pendiente != null) {
+      _error = null;
+      _status = SessionStatus.iniciando;
+      notifyListeners();
+      unawaited(_cerrarSesionRestaurada(pendiente));
+      return;
+    }
     final u = _firebaseUser;
     if (u == null) return;
     _status = SessionStatus.cargandoPerfil;
@@ -124,6 +212,7 @@ class SessionProvider extends ChangeNotifier {
 
   Future<void> iniciarSesion({required String email, required String password}) async {
     await _auth.iniciarSesion(email: email, password: password);
+    AuthDiag.log('inicio de sesión normal completado: currentUser=${AuthDiag.actualNulo(() => _auth.usuarioActual)}');
     // El estado lo actualiza el listener de authStateChanges.
   }
 
@@ -229,11 +318,19 @@ class SessionProvider extends ChangeNotifier {
         // Las notificaciones nunca bloquean el cierre de sesión.
       }
     }
-    await _auth.cerrarSesion();
+    try {
+      AuthDiag.log('signOut MANUAL: antes (currentUser=${AuthDiag.actualNulo(() => _auth.usuarioActual)})');
+      await _auth.cerrarSesion();
+      AuthDiag.log('signOut MANUAL: después, sin excepción (currentUser=${AuthDiag.actualNulo(() => _auth.usuarioActual)})');
+    } catch (e) {
+      AuthDiag.log('signOut MANUAL: FALLÓ tipo=${AuthDiag.tipo(e)}');
+      rethrow;
+    }
   }
 
   @override
   void dispose() {
+    _cerrado = true;
     _authSub?.cancel();
     _userSub?.cancel();
     super.dispose();

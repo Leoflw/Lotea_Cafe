@@ -197,6 +197,20 @@ class DeviceTokenService extends ChangeNotifier {
     await _seguro(_gateway.eliminarToken); // el siguiente inicio de sesión recibe un token nuevo
   }
 
+  /// Se llama ANTES de cerrar una sesión RESTAURADA al abrir la app (preferencia «Mantener
+  /// sesión iniciada» desactivada). En un arranque en frío [_registrado] está vacío, así
+  /// que [liberarDispositivo] no borraría nada y el teléfono seguiría recibiendo avisos de
+  /// una cuenta ya cerrada. Aquí se obtiene el token actual de FCM, se borra su registro
+  /// mientras la cuenta sigue autenticada (después las reglas ya no lo permitirían) y se
+  /// invalida el token. Nunca lanza.
+  Future<void> liberarDispositivoDeSesionRestaurada(String uid) async {
+    final token = await _seguro(_gateway.obtenerToken);
+    if (token != null && token.isNotEmpty) {
+      await _seguro(() => _store.eliminar(uid: uid, tokenId: idDeToken(token)));
+    }
+    await _seguro(_gateway.eliminarToken);
+  }
+
   @override
   void dispose() {
     _cerrado = true;

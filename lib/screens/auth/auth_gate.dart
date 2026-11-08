@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import '../../services/auth_diag.dart';
 import '../../services/home_tab_notifier.dart';
 import '../../services/navigation.dart';
 import '../../state/session_provider.dart';
@@ -35,6 +36,17 @@ class _AuthGateState extends State<AuthGate> {
         navigatorKey.currentState?.popUntil((r) => r.isFirst);
         if (mounted) context.read<HomeTabNotifier>().reiniciar();
       });
+    }
+    if (_anterior != estado) {
+      final pantalla = switch (estado) {
+        SessionStatus.iniciando => 'BrandSplash',
+        SessionStatus.cargandoPerfil => 'BrandSplash(cargando)',
+        SessionStatus.sinSesion => 'LoginScreen',
+        SessionStatus.perfilFaltante => 'CompleteProfileScreen',
+        SessionStatus.errorPerfil => 'ErrorState',
+        SessionStatus.listo => (sesion.usuario?.onboardingCompleto ?? false) ? 'HomeShell' : 'OnboardingScreen',
+      };
+      AuthDiag.log('AuthGate: estado ${_anterior?.name ?? 'ninguno'} -> ${estado.name}, muestra $pantalla');
     }
     _anterior = estado;
 

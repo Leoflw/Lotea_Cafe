@@ -11,6 +11,7 @@ import '../../theme/app_theme.dart';
 import '../../utils/avatar_logic.dart';
 import '../../widgets/avatar_circular.dart';
 import '../../widgets/badges.dart';
+import '../../widgets/keep_session_tile.dart';
 import '../../widgets/push_activation_card.dart';
 import '../seller/seller_profile_edit_screen.dart';
 
@@ -89,6 +90,8 @@ class _MyProfileScreenState extends State<MyProfileScreen> {
 
           const SizedBox(height: 24),
           const PushActivationCard(),
+          const SizedBox(height: 12),
+          const KeepSessionTile(),
 
           const SizedBox(height: 32),
           OutlinedButton.icon(

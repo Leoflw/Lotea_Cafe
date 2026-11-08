@@ -52,6 +52,8 @@ class FirebasePushGateway implements PushGateway {
       case AuthorizationStatus.provisional:
         return PushPermiso.concedido;
       case AuthorizationStatus.denied:
+      // firebase_messaging 17 añadió `deniedPermanently`: para la app es lo mismo que denegado.
+      case AuthorizationStatus.deniedPermanently:
         return PushPermiso.denegado;
       case AuthorizationStatus.notDetermined:
         return PushPermiso.noDeterminado;
