@@ -24,16 +24,22 @@ class ImageKitConfig {
   /// dominios propios al optimizar la visualización.
   final String urlEndpoint;
 
+  /// URL HTTPS del Worker de limpieza (opcional). Sin él la app sigue encolando las
+  /// solicitudes de borrado y es el cron del Worker quien las procesa.
+  final String cleanupEndpoint;
+
   const ImageKitConfig({
     required this.authEndpoint,
     required this.publicKey,
     this.urlEndpoint = '',
+    this.cleanupEndpoint = '',
   });
 
   static const fromEnvironment = ImageKitConfig(
     authEndpoint: String.fromEnvironment('IMAGEKIT_AUTH_ENDPOINT'),
     publicKey: String.fromEnvironment('IMAGEKIT_PUBLIC_KEY'),
     urlEndpoint: String.fromEnvironment('IMAGEKIT_URL_ENDPOINT'),
+    cleanupEndpoint: String.fromEnvironment('IMAGEKIT_CLEANUP_ENDPOINT'),
   );
 
   /// Valor por defecto del URL endpoint (vacío si no se definió).

@@ -1,0 +1,26 @@
+# Cloudflare Worker de LIMPIEZA de imágenes de ImageKit y de eliminación de lotes — Lotea Café.
+# Independiente de imagekit-upload-auth (subidas) y de push-notifications: nombre,
+# código, variables y secretos propios. Plan gratuito de Workers: no necesita KV,
+# R2, D1 ni Durable Objects (la cola vive en Firestore).
+# NO desplegar sin autorización: ver IMAGEKIT_CLEANUP.md.
+name = "imagekit-cleanup"
+main = "src/index.js"
+compatibility_date = "2025-09-01"
+workers_dev = true
+
+# Reintentos sin depender de la app: cada 30 minutos revisa la cola de TODOS los
+# usuarios (necesita el índice de grupo de colección de firestore.indexes.json).
+# Los Cron Triggers están incluidos en el plan gratuito.
+[triggers]
+crons = ["*/30 * * * *"]
+
+# Variables PÚBLICAS (se pueden versionar). Las credenciales NO van aquí.
+# Secretos (solo con `npx wrangler secret put NOMBRE` o el panel de Cloudflare):
+#   IMAGEKIT_PRIVATE_KEY          clave privada de ImageKit (solo se usa para leer y borrar archivos)
+#   CLEANUP_SERVICE_ACCOUNT_JSON  cuenta de servicio de Google con permisos mínimos de Firestore
+[vars]
+# ID del proyecto de Firebase. El Worker solo acepta tokens de ESTE proyecto.
+FIREBASE_PROJECT_ID = "lotea-cafe"
+# DEBE ser igual a IMAGEKIT_FOLDER_ROOT del Worker de subidas: los archivos de cada
+# persona viven en {raíz}/users/{uid}/{lots|profile}.
+IMAGEKIT_FOLDER_ROOT = "/lotea-cafe"

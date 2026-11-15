@@ -6,6 +6,7 @@ import 'repositories/chat_repository.dart';
 import 'repositories/coffee_lot_repository.dart';
 import 'repositories/device_token_repository.dart';
 import 'repositories/favorite_repository.dart';
+import 'repositories/image_cleanup_client.dart';
 import 'repositories/image_repository.dart';
 import 'repositories/interest_request_repository.dart';
 import 'repositories/quote_repository.dart';
@@ -88,10 +89,13 @@ class _LoteaCafeAppState extends State<LoteaCafeApp> {
         ChangeNotifierProvider(
           create: (c) => DeviceTokenService(gateway: c.read<PushGateway>(), store: DeviceTokenRepository()),
         ),
+        // Aviso al Worker de limpieza de ImageKit (solo pide procesar la cola; va ANTES
+        // de los repositorios que lo usan).
+        Provider(create: (_) => ImageCleanupClient()),
         Provider(create: (_) => AuthRepository()),
         Provider(create: (_) => UserRepository()),
-        Provider(create: (_) => SellerRepository()),
-        Provider(create: (_) => CoffeeLotRepository()),
+        Provider(create: (c) => SellerRepository(alRetirarFotos: c.read<ImageCleanupClient>().procesarCola)),
+        Provider(create: (c) => CoffeeLotRepository(alRetirarFotos: c.read<ImageCleanupClient>().procesarCola)),
         Provider(create: (_) => InterestRequestRepository()),
         Provider(create: (_) => FavoriteRepository()),
         Provider(create: (c) => ChatRepository(notificador: c.read<NotificadorPush>())),

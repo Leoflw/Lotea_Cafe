@@ -92,6 +92,64 @@ service cloud.firestore {
         allow create, update: if signedIn() && uid() == userId && validDeviceToken();
       }
 
+      // ---------- cola de eliminación de fotos: users/{uid}/pendingFileDeletions/{fileId} ----------
+      // La app solo PIDE borrar una foto de ImageKit que ya dejó de usar; quien borra es el
+      // Worker de limpieza (cloudflare/imagekit-cleanup), con su cuenta de servicio, que no
+      // pasa por estas reglas y es el único que escribe estado, intentos y errores.
+      //  - Cada persona crea solicitudes SOLO en su propia cola y con estado «pendiente».
+      //  - El id del documento es el fileId de ImageKit (forma validada aquí y en el Worker).
+      //  - El cliente no puede cambiar ni borrar solicitudes, salvo volver a pedir una que el
+      //    Worker dejó «enUso» (la foto se quitó de verdad más tarde) o «fallido». Las
+      //    «retenida» (solo las usa el historial de negociaciones) las revisa el Worker solo.
+      //  - Que la solicitud exista NO basta para borrar: el Worker comprueba además que el
+      //    archivo es de esa persona y que ningún lote ni perfil lo usa.
+      match /pendingFileDeletions/{fileId} {
+        function validFileId() {
+          return fileId.matches('^[A-Za-z0-9_-]{8,64}$');
+        }
+        allow read: if signedIn() && uid() == userId;
+        allow create: if signedIn() && uid() == userId && validFileId()
+          && incoming().keys().hasOnly(['fileId', 'origen', 'refId', 'estado', 'createdAt'])
+          && incoming().keys().hasAll(['fileId', 'origen', 'estado', 'createdAt'])
+          && incoming().fileId == fileId
+          && incoming().origen in ['lot', 'profile']
+          && (!('refId' in incoming()) || isStr(incoming().refId, 1, 128))
+          && incoming().estado == 'pendiente'
+          && incoming().createdAt == request.time;
+        allow update: if signedIn() && uid() == userId
+          && resource.data.estado in ['enUso', 'fallido']
+          && touchesOnly(['estado', 'createdAt'])
+          && incoming().estado == 'pendiente'
+          && incoming().createdAt == request.time;
+        allow delete: if false;
+      }
+
+      // ---------- eliminación de lotes: users/{uid}/pendingLotDeletions/{lotId} ----------
+      // Eliminar un lote deja en null las copias históricas `loteFoto` de SUS solicitudes de
+      // interés y cotizaciones. Esas colecciones no admiten cambios de `loteFoto` desde la app
+      // (ver sus reglas), así que la limpieza la hace SOLO el Worker de limpieza con su cuenta
+      // de servicio. La app únicamente PIDE la eliminación:
+      //  - solo del lote que es suyo (se comprueba contra el lote existente);
+      //  - con estado «pendiente»; el Worker escribe el resto y borra el lote;
+      //  - sin poder cambiarla ni borrarla (salvo reabrir una «fallido»).
+      match /pendingLotDeletions/{lotId} {
+        allow read: if signedIn() && uid() == userId;
+        allow create: if signedIn() && uid() == userId
+          && lotId.matches('^[A-Za-z0-9]{1,128}$')
+          && incoming().keys().hasOnly(['lotId', 'estado', 'createdAt'])
+          && incoming().keys().hasAll(['lotId', 'estado', 'createdAt'])
+          && incoming().lotId == lotId
+          && incoming().estado == 'pendiente'
+          && incoming().createdAt == request.time
+          && get(/databases/$(database)/documents/coffeeLots/$(lotId)).data.sellerId == uid();
+        allow update: if signedIn() && uid() == userId
+          && resource.data.estado == 'fallido'
+          && touchesOnly(['estado', 'createdAt'])
+          && incoming().estado == 'pendiente'
+          && incoming().createdAt == request.time;
+        allow delete: if false;
+      }
+
       // ---------- favoritos: users/{uid}/favorites/{tipo}_{refId} ----------
       match /favorites/{favId} {
         allow read: if signedIn() && uid() == userId;
@@ -202,7 +260,15 @@ service cloud.firestore {
               || (resource.data.fechaPublicacion == null && incoming().fechaPublicacion == request.time))
         && incoming().updatedAt == request.time;
 
-      allow delete: if signedIn() && resource.data.sellerId == uid();
+      // Un lote solo se borra cuando (1) YA no tiene fotos y (2) existe la solicitud de
+      // eliminación users/{uid}/pendingLotDeletions/{lotId}. Así un borrado directo del documento
+      // no puede dejar imágenes huérfanas ni copias históricas `loteFoto` sin limpiar: la
+      // solicitud hace que el Worker deje en null `loteFoto` de las negociaciones de ese lote.
+      // (La app normal no borra: pide la eliminación y la completa el Worker.)
+      allow delete: if signedIn() && resource.data.sellerId == uid()
+        && resource.data.get('fotos', []).size() == 0
+        && resource.data.get('fotosStoragePaths', []).size() == 0
+        && exists(/databases/$(database)/documents/users/$(uid())/pendingLotDeletions/$(lotId));
     }
 
     // ---------- interestRequests/{compradorId}_{coffeeLotId} ----------

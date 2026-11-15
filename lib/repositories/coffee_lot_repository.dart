@@ -1,7 +1,9 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../models/coffee_lot.dart';
 import '../models/discover_filters.dart';
+import '../utils/photo_cleanup.dart';
 import '../utils/photo_limits.dart';
+import 'pending_deletions.dart';
 import 'repo_exception.dart';
 
 class CatalogPage {
@@ -16,7 +18,13 @@ class CoffeeLotRepository {
   static const tamanoPagina = 20;
 
   final FirebaseFirestore _db;
-  CoffeeLotRepository({FirebaseFirestore? db}) : _db = db ?? FirebaseFirestore.instance;
+
+  /// Aviso (sin esperar respuesta) al Worker de limpieza tras encolar fotos retiradas.
+  final Future<void> Function()? _alRetirarFotos;
+
+  CoffeeLotRepository({FirebaseFirestore? db, Future<void> Function()? alRetirarFotos})
+      : _db = db ?? FirebaseFirestore.instance,
+        _alRetirarFotos = alRetirarFotos;
 
   CollectionReference<Map<String, dynamic>> get _col => _db.collection('coffeeLots');
 
@@ -138,20 +146,67 @@ class CoffeeLotRepository {
           ...lote.toEditableMap(),
           'updatedAt': FieldValue.serverTimestamp(),
         };
+        // El lote y las solicitudes de borrado de las fotos que deja de usar se
+        // confirman en UNA operación atómica: la foto nueva queda guardada a la vez
+        // que se pide eliminar la anterior (nunca antes). El Worker, además,
+        // comprueba que la foto vieja ya no esté referenciada.
+        final batch = _db.batch();
+        var retiradas = 0;
         if (idExistente == null) {
           datos['vendedorVerificado'] = false; // solo un proceso interno puede ponerlo en true
           datos['createdAt'] = FieldValue.serverTimestamp();
           datos['fechaPublicacion'] = lote.publicado ? FieldValue.serverTimestamp() : null;
-          await ref.set(datos);
+          batch.set(ref, datos);
         } else {
           final yaTeniaFecha = previo?.data()?['fechaPublicacion'] != null;
           if (lote.publicado && !yaTeniaFecha) datos['fechaPublicacion'] = FieldValue.serverTimestamp();
-          await ref.update(datos);
+          batch.update(ref, datos);
+          retiradas = await PendingFileDeletions.encolar(
+            db: _db,
+            batch: batch,
+            uid: lote.sellerId,
+            fileIds: PhotoCleanup.retirados(
+              previos: PhotoCleanup.idsDe(previo?.data()?['fotosStoragePaths']),
+              actuales: lote.fotosStoragePaths,
+            ),
+            origen: OrigenFoto.lot,
+            refId: ref.id,
+          );
         }
+        await batch.commit();
+        if (retiradas > 0) pedirLimpiezaSinEsperar(_alRetirarFotos);
         return ref.id;
       });
 
   static int _contar(Object? lista) => lista is List ? lista.length : 0;
 
-  Future<void> eliminar(String lotId) => guardar(() => _col.doc(lotId).delete());
+  /// PIDE eliminar un lote sin dejar fotos huérfanas ni copias históricas rotas. En UNA operación
+  /// atómica: el lote pasa a borrador sin fotos (deja de verse en el catálogo), se encola la
+  /// eliminación de cada una de sus fotos y se crea `users/{uid}/pendingLotDeletions/{lotId}`.
+  /// El borrado real lo completa el Worker de limpieza: deja en null `loteFoto` en las solicitudes
+  /// de interés y cotizaciones de ESE lote (la app no puede modificar ese historial), borra el
+  /// lote y libera para su borrado las fotos que solo retenía el historial. Si la app se cierra
+  /// a mitad, no se pierde nada: la operación es atómica y el Worker la termina (también por cron).
+  Future<void> eliminar(String lotId) => guardar(() async {
+        final ref = _col.doc(lotId);
+        final datos = (await ref.get()).data();
+        if (datos == null) return;
+        final sellerId = datos['sellerId'];
+        if (sellerId is! String) return;
+        final ids = PhotoCleanup.retirados(previos: PhotoCleanup.idsDe(datos['fotosStoragePaths']), actuales: const <String>[]);
+        final batch = _db.batch();
+        batch.update(ref, {
+          'estado': EstadoLote.borrador.name,
+          'fotos': <String>[],
+          'fotosStoragePaths': <String>[],
+          'updatedAt': FieldValue.serverTimestamp(),
+        });
+        await PendingFileDeletions.encolar(db: _db, batch: batch, uid: sellerId, fileIds: ids, origen: OrigenFoto.lot, refId: lotId);
+        await PendingFileDeletions.encolarBorradoDeLote(db: _db, batch: batch, uid: sellerId, lotId: lotId);
+        // Repetir la eliminación también reabre las solicitudes de foto de ESTE lote que quedaron
+        // «fallido» (el lote ya no tiene fotos, así que `encolar` no las vuelve a ver).
+        await PendingFileDeletions.reabrirFotosFallidas(db: _db, batch: batch, uid: sellerId, refId: lotId, origen: OrigenFoto.lot, excluir: ids);
+        await batch.commit();
+        pedirLimpiezaSinEsperar(_alRetirarFotos);
+      });
 }

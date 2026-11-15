@@ -1,0 +1,15 @@
+{
+  "name": "imagekit-cleanup",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Cloudflare Worker (plan gratuito) que elimina de ImageKit las fotos de Lotea Café que ya no usa ningún documento.",
+  "type": "module",
+  "scripts": {
+    "test": "node --test",
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "wrangler": "^4.0.0"
+  }
+}

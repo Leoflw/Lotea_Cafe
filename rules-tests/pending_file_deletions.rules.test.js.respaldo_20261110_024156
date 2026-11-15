@@ -1,0 +1,217 @@
+// Pruebas de users/{uid}/pendingFileDeletions y del borrado de lotes contra el EMULADOR de
+// Firestore. Ejecutar desde esta carpeta (necesita Java y firebase-tools): npm install && npm test
+import { test, before, after, beforeEach } from 'node:test';
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { initializeTestEnvironment, assertSucceeds, assertFails } from '@firebase/rules-unit-testing';
+import { doc, setDoc, getDoc, deleteDoc, updateDoc, serverTimestamp, writeBatch } from 'firebase/firestore';
+import { loteReal } from './fixtures.js';
+
+let env;
+const FID = '5f8a1c2b3d4e5f6a7b8c9d01';
+const FID2 = '5f8a1c2b3d4e5f6a7b8c9d02';
+
+before(async () => {
+  env = await initializeTestEnvironment({
+    projectId: 'lotea-cafe-test-pending-deletions', // propio de este archivo (ver device_tokens.rules.test.js)
+    firestore: { rules: readFileSync(new URL('../firestore.rules', import.meta.url), 'utf8') },
+  });
+});
+after(async () => env.cleanup());
+beforeEach(async () => {
+  await env.clearFirestore();
+  await env.withSecurityRulesDisabled(async (ctx) => {
+    const db = ctx.firestore();
+    await setDoc(doc(db, 'users/ana'), { rol: 'vendedor', nombre: 'Ana' });
+    await setDoc(doc(db, 'users/beto'), { rol: 'vendedor', nombre: 'Beto' });
+    await setDoc(doc(db, 'sellerProfiles/ana'), { usuarioId: 'ana', nombreMarca: 'Marca' });
+    await setDoc(doc(db, `users/ana/pendingFileDeletions/${FID2}`), { fileId: FID2, origen: 'lot', estado: 'enUso', intentos: 0 });
+    // Lotes con el esquema REAL (fixtures.js): las reglas de actualización evalúan variedades, precioCOP, unidad…
+    await setDoc(doc(db, 'coffeeLots/conFotos'), loteReal({ nombre: 'A', fotos: ['https://x/a.jpg'], fotosStoragePaths: [FID] }));
+    await setDoc(doc(db, 'coffeeLots/sinFotos'), loteReal({ nombre: 'B', estado: 'borrador', fechaPublicacion: null }));
+  });
+});
+
+const dbDe = (uid) => env.authenticatedContext(uid).firestore();
+const cola = (db, uid, id) => doc(db, 'users', uid, 'pendingFileDeletions', id);
+const solicitud = (extra = {}) => ({ fileId: FID, origen: 'lot', estado: 'pendiente', createdAt: serverTimestamp(), ...extra });
+
+test('una persona puede encolar una foto en SU cola', async () => {
+  await assertSucceeds(setDoc(cola(dbDe('ana'), 'ana', FID), solicitud()));
+  await assertSucceeds(setDoc(cola(dbDe('ana'), 'ana', FID2.replace('02', '03')), solicitud({ fileId: FID2.replace('02', '03'), origen: 'profile', refId: 'ana' })));
+});
+test('no puede encolar en la cola de OTRA persona ni leerla', async () => {
+  await assertFails(setDoc(cola(dbDe('beto'), 'ana', FID), solicitud()));
+  await assertFails(getDoc(cola(dbDe('beto'), 'ana', FID2)));
+  await assertSucceeds(getDoc(cola(dbDe('ana'), 'ana', FID2)));
+});
+test('sin sesión no puede hacer nada', async () => {
+  const db = env.unauthenticatedContext().firestore();
+  await assertFails(setDoc(cola(db, 'ana', FID), solicitud()));
+});
+test('el estado inicial debe ser «pendiente»: no puede fingir «completado» ni escribir campos del Worker', async () => {
+  const db = dbDe('ana');
+  await assertFails(setDoc(cola(db, 'ana', FID), solicitud({ estado: 'completado' })));
+  await assertFails(setDoc(cola(db, 'ana', FID), solicitud({ intentos: 0 })));
+  await assertFails(setDoc(cola(db, 'ana', FID), solicitud({ ultimoError: 'x' })));
+});
+test('el id debe coincidir con fileId y tener forma válida; origen y createdAt validados', async () => {
+  const db = dbDe('ana');
+  await assertFails(setDoc(cola(db, 'ana', FID), solicitud({ fileId: FID2 })));
+  await assertFails(setDoc(cola(db, 'ana', 'corto'), solicitud({ fileId: 'corto' })));
+  await assertFails(setDoc(cola(db, 'ana', 'ruta/con/barras'.replace(/\//g, '_') + '!!'), solicitud({ fileId: 'ruta_con_barras!!' })));
+  await assertFails(setDoc(cola(db, 'ana', FID), solicitud({ origen: 'otro' })));
+  await assertFails(setDoc(cola(db, 'ana', FID), solicitud({ createdAt: new Date() })));
+});
+test('no puede borrar solicitudes ni cambiarlas (salvo reabrir una «enUso»)', async () => {
+  const db = dbDe('ana');
+  await assertFails(deleteDoc(cola(db, 'ana', FID2)));
+  await assertFails(updateDoc(cola(db, 'ana', FID2), { estado: 'completado' }));
+  await assertFails(updateDoc(cola(db, 'ana', FID2), { estado: 'pendiente', intentos: 5, createdAt: serverTimestamp() }));
+  await assertSucceeds(updateDoc(cola(db, 'ana', FID2), { estado: 'pendiente', createdAt: serverTimestamp() }));
+});
+test('una solicitud que NO está «enUso» no se puede reabrir ni modificar', async () => {
+  await env.withSecurityRulesDisabled(async (ctx) => {
+    await setDoc(doc(ctx.firestore(), `users/ana/pendingFileDeletions/${FID}`), { fileId: FID, origen: 'lot', estado: 'completado' });
+  });
+  await assertFails(updateDoc(cola(dbDe('ana'), 'ana', FID), { estado: 'pendiente', createdAt: serverTimestamp() }));
+});
+
+// ---- Un borrado directo del lote no puede saltarse la cola ----
+const solicitudLote = (db, uid, id) => doc(db, 'users', uid, 'pendingLotDeletions', id);
+const pedirLote = (extra = {}) => ({ lotId: 'sinFotos', estado: 'pendiente', createdAt: serverTimestamp(), ...extra });
+
+test('borrar un lote que todavía tiene fotos se rechaza (saltarse la cola)', async () => {
+  await assertFails(deleteDoc(doc(dbDe('ana'), 'coffeeLots/conFotos')));
+});
+test('borrar un lote sin fotos pero SIN solicitud de eliminación se rechaza (dejaría el historial sin limpiar)', async () => {
+  await assertFails(deleteDoc(doc(dbDe('ana'), 'coffeeLots/sinFotos')));
+});
+test('un lote sin fotos y con solicitud sí se puede borrar; el de otra persona nunca', async () => {
+  await assertSucceeds(setDoc(solicitudLote(dbDe('ana'), 'ana', 'sinFotos'), pedirLote()));
+  await assertFails(deleteDoc(doc(dbDe('beto'), 'coffeeLots/sinFotos')));
+  await assertSucceeds(deleteDoc(doc(dbDe('ana'), 'coffeeLots/sinFotos')));
+});
+const vaciarLote = (db, id = 'conFotos') => doc(db, 'coffeeLots', id);
+const lotePedido = (id = 'conFotos') => pedirLote({ lotId: id });
+const existe = async (ref) => (await env.withSecurityRulesDisabled(async (ctx) => (await getDoc(doc(ctx.firestore(), ref.path))).exists()));
+
+test('la app pide la eliminación en UN lote atómico: vacía fotos, encola la foto y crea la solicitud del lote', async () => {
+  const db = dbDe('ana');
+  const batch = writeBatch(db);
+  batch.update(vaciarLote(db), { estado: 'borrador', fotos: [], fotosStoragePaths: [], updatedAt: serverTimestamp() });
+  batch.set(cola(db, 'ana', FID), solicitud());
+  batch.set(solicitudLote(db, 'ana', 'conFotos'), lotePedido());
+  await assertSucceeds(batch.commit());
+  // Y después, ya sin fotos y con su solicitud, se puede borrar el documento (lo haría el Worker o su dueño).
+  await assertSucceeds(deleteDoc(vaciarLote(db)));
+});
+test('esa misma operación atómica hecha por OTRA persona sobre el lote de ana se rechaza entera', async () => {
+  const db = dbDe('beto');
+  const batch = writeBatch(db);
+  batch.update(vaciarLote(db), { estado: 'borrador', fotos: [], fotosStoragePaths: [], updatedAt: serverTimestamp() });
+  batch.set(cola(db, 'beto', FID), solicitud());
+  batch.set(solicitudLote(db, 'beto', 'conFotos'), lotePedido());
+  await assertFails(batch.commit());
+  assert.equal(await existe(cola(db, 'beto', FID)), false, 'es atómico: no quedó nada a medias');
+});
+test('la operación atómica conserva las validaciones del lote: no admite otros campos ni datos inválidos', async () => {
+  const intentos = [
+    { vendedorVerificado: true }, // campo que solo un proceso interno puede poner
+    { sellerId: 'beto' }, // cambiar de dueño
+    { variedades: [] }, // dejar el lote sin variedades
+    { precioCOP: 0 }, // precio inválido
+    { fechaPublicacion: new Date() }, // fecha de publicación manipulada
+  ];
+  for (const extra of intentos) {
+    const db = dbDe('ana');
+    const batch = writeBatch(db);
+    batch.update(vaciarLote(db), { estado: 'borrador', fotos: [], fotosStoragePaths: [], updatedAt: serverTimestamp(), ...extra });
+    batch.set(solicitudLote(db, 'ana', 'conFotos'), lotePedido());
+    await assertFails(batch.commit());
+  }
+  assert.equal(await existe(solicitudLote(dbDe('ana'), 'ana', 'conFotos')), false);
+});
+test('la operación atómica no puede colar la solicitud en la cola de OTRA persona: se rechaza entera', async () => {
+  const db = dbDe('ana');
+  const batch = writeBatch(db);
+  batch.update(vaciarLote(db), { estado: 'borrador', fotos: [], fotosStoragePaths: [], updatedAt: serverTimestamp() });
+  batch.set(solicitudLote(db, 'beto', 'conFotos'), lotePedido()); // cola de beto
+  await assertFails(batch.commit());
+  assert.deepEqual((await env.withSecurityRulesDisabled(async (ctx) => (await getDoc(doc(ctx.firestore(), 'coffeeLots/conFotos'))).data().fotosStoragePaths)), [FID], 'el lote no se vació');
+});
+test('vaciar las fotos SIN crear la solicitud del lote deja el lote sin poder borrarse', async () => {
+  const db = dbDe('ana');
+  const batch = writeBatch(db);
+  batch.update(vaciarLote(db), { estado: 'borrador', fotos: [], fotosStoragePaths: [], updatedAt: serverTimestamp() });
+  batch.set(cola(db, 'ana', FID), solicitud());
+  await assertSucceeds(batch.commit());
+  await assertFails(deleteDoc(vaciarLote(db)));
+});
+test('los perfiles siguen sin poder borrarse', async () => {
+  await assertFails(deleteDoc(doc(dbDe('ana'), 'sellerProfiles/ana')));
+});
+test('una solicitud de foto «fallido» se puede reabrir; una «retenida» no (la revisa el Worker)', async () => {
+  await env.withSecurityRulesDisabled(async (ctx) => {
+    const db = ctx.firestore();
+    await setDoc(doc(db, `users/ana/pendingFileDeletions/${FID}`), { fileId: FID, origen: 'lot', estado: 'fallido' });
+    await setDoc(doc(db, `users/ana/pendingFileDeletions/${FID2.replace('02', '09')}`), { fileId: FID2.replace('02', '09'), origen: 'lot', estado: 'retenida' });
+  });
+  await assertSucceeds(updateDoc(cola(dbDe('ana'), 'ana', FID), { estado: 'pendiente', createdAt: serverTimestamp() }));
+  await assertFails(updateDoc(cola(dbDe('ana'), 'ana', FID2.replace('02', '09')), { estado: 'pendiente', createdAt: serverTimestamp() }));
+});
+
+// ---- Reapertura de solicitudes «fallido»: solo el dueño, solo estado y createdAt ----
+const FID_F = FID.replace('01', '08');
+const sembrarFallidas = async () => {
+  await env.withSecurityRulesDisabled(async (ctx) => {
+    const db = ctx.firestore();
+    const campos = { estado: 'fallido', intentos: 6, ultimoError: 'imagekit_5xx' };
+    await setDoc(doc(db, `users/ana/pendingFileDeletions/${FID_F}`), { fileId: FID_F, origen: 'lot', ...campos });
+    await setDoc(doc(db, 'users/ana/pendingLotDeletions/sinFotos'), { lotId: 'sinFotos', ...campos });
+  });
+};
+const reabrir = () => ({ estado: 'pendiente', createdAt: serverTimestamp() });
+
+test('el dueño reabre sus solicitudes «fallido» (foto y lote)', async () => {
+  await sembrarFallidas();
+  await assertSucceeds(updateDoc(cola(dbDe('ana'), 'ana', FID_F), reabrir()));
+  await assertSucceeds(updateDoc(doc(dbDe('ana'), 'users/ana/pendingLotDeletions/sinFotos'), reabrir()));
+});
+test('OTRA persona no puede reabrir las solicitudes de ana (foto ni lote)', async () => {
+  await sembrarFallidas();
+  await assertFails(updateDoc(cola(dbDe('beto'), 'ana', FID_F), reabrir()));
+  await assertFails(updateDoc(doc(dbDe('beto'), 'users/ana/pendingLotDeletions/sinFotos'), reabrir()));
+  const anonimo = env.unauthenticatedContext().firestore();
+  await assertFails(updateDoc(cola(anonimo, 'ana', FID_F), reabrir()));
+});
+test('al reabrir no puede reiniciar el contador, borrar el error ni cambiar otros campos (lo hace el Worker)', async () => {
+  await sembrarFallidas();
+  const foto = cola(dbDe('ana'), 'ana', FID_F);
+  const lote = doc(dbDe('ana'), 'users/ana/pendingLotDeletions/sinFotos');
+  for (const ref of [foto, lote]) {
+    await assertFails(updateDoc(ref, { ...reabrir(), intentos: 0 }));
+    await assertFails(updateDoc(ref, { ...reabrir(), ultimoError: null }));
+    await assertFails(updateDoc(ref, { ...reabrir(), refId: 'otro' }));
+    await assertFails(updateDoc(ref, { estado: 'completado', createdAt: serverTimestamp() }));
+  }
+});
+test('una solicitud «completado» (foto o lote) no se puede reabrir', async () => {
+  await env.withSecurityRulesDisabled(async (ctx) => {
+    const db = ctx.firestore();
+    await setDoc(doc(db, `users/ana/pendingFileDeletions/${FID_F}`), { fileId: FID_F, origen: 'lot', estado: 'completado' });
+    await setDoc(doc(db, 'users/ana/pendingLotDeletions/sinFotos'), { lotId: 'sinFotos', estado: 'completado' });
+  });
+  await assertFails(updateDoc(cola(dbDe('ana'), 'ana', FID_F), reabrir()));
+  await assertFails(updateDoc(doc(dbDe('ana'), 'users/ana/pendingLotDeletions/sinFotos'), reabrir()));
+});
+test('reabrir una solicitud no permite tocar el historial de fotos (loteFoto) ni borrar la solicitud', async () => {
+  await sembrarFallidas();
+  await env.withSecurityRulesDisabled(async (ctx) => {
+    await setDoc(doc(ctx.firestore(), 'interestRequests/c1_sinFotos'), { compradorId: 'c1', sellerId: 'ana', coffeeLotId: 'sinFotos', estado: 'pendiente', loteFoto: 'https://ik.imagekit.io/demo/a.jpg' });
+  });
+  const db = dbDe('ana');
+  await assertFails(updateDoc(doc(db, 'interestRequests/c1_sinFotos'), { loteFoto: null, updatedAt: serverTimestamp() }));
+  await assertFails(deleteDoc(cola(db, 'ana', FID_F)));
+  await assertFails(deleteDoc(doc(db, 'users/ana/pendingLotDeletions/sinFotos')));
+});
