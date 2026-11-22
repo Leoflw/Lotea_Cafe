@@ -104,13 +104,24 @@ StatusTone toneEstadoSolicitud(EstadoSolicitud e) {
   }
 }
 
+/// Etiqueta y explicación de un estado comercial que esta versión de la app no reconoce.
+const etiquetaEstadoNoReconocido = 'Estado no reconocido';
+const mensajeEstadoNoReconocido =
+    'Este elemento está en un estado que esta versión de la app no reconoce, así que no se ofrecen acciones. '
+    'Actualiza la aplicación para ver las opciones disponibles.';
+
 /// Estado de una solicitud de interés (misma presentación que las
 /// cotizaciones y la disponibilidad).
 class RequestStatusChip extends StatelessWidget {
   final EstadoSolicitud estado;
-  const RequestStatusChip({super.key, required this.estado});
+
+  /// El documento traía un estado que esta versión no conoce: no se presenta el valor de respaldo
+  /// del enum (p. ej. «Pendiente») como si fuera un estado confirmado.
+  final bool desconocido;
+  const RequestStatusChip({super.key, required this.estado, this.desconocido = false});
 
   @override
-  Widget build(BuildContext context) =>
-      StatusPill(label: estado.label, tone: toneEstadoSolicitud(estado));
+  Widget build(BuildContext context) => desconocido
+      ? const StatusPill(label: etiquetaEstadoNoReconocido, tone: StatusTone.neutral)
+      : StatusPill(label: estado.label, tone: toneEstadoSolicitud(estado));
 }

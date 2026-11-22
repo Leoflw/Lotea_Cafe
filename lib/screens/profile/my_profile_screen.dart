@@ -2,6 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../models/app_user.dart';
 import '../../models/seller_profile.dart';
+import '../../state/account_deletion_controller.dart';
+import '../../widgets/account_deletion_section.dart';
 import '../../state/activity_provider.dart';
 import '../../state/remote.dart';
 import '../../state/session_provider.dart';
@@ -92,6 +94,14 @@ class _MyProfileScreenState extends State<MyProfileScreen> {
           const PushActivationCard(),
           const SizedBox(height: 12),
           const KeepSessionTile(),
+
+          const SizedBox(height: 28),
+          // Eliminar cuenta (etapa 6): solicitar o cancelar con reautenticación; el estado viene de Firestore.
+          AccountDeletionSection(
+            usuario: usuario,
+            onSolicitar: context.read<AccountDeletionController>().solicitar,
+            onCancelar: context.read<AccountDeletionController>().cancelar,
+          ),
 
           const SizedBox(height: 32),
           OutlinedButton.icon(

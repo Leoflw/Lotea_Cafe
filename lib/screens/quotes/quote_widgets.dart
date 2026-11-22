@@ -30,17 +30,23 @@ Color colorEstadoCotizacion(EstadoCotizacion e) => toneEstadoCotizacion(e).foreg
 class QuoteStatusChip extends StatelessWidget {
   final EstadoCotizacion estado;
   final bool corto;
-  const QuoteStatusChip({super.key, required this.estado, this.corto = true});
+  /// Estado que esta versión no reconoce: se muestra «Estado no reconocido», no el valor de respaldo.
+  final bool desconocido;
+  const QuoteStatusChip({super.key, required this.estado, this.corto = true, this.desconocido = false});
 
   @override
   Widget build(BuildContext context) =>
-      StatusPill(label: corto ? estado.corto : estado.label, tone: toneEstadoCotizacion(estado));
+      desconocido
+          ? const StatusPill(label: etiquetaEstadoNoReconocido, tone: StatusTone.neutral)
+          : StatusPill(label: corto ? estado.corto : estado.label, tone: toneEstadoCotizacion(estado));
 }
 
 /// ¿Esta cotización espera una acción de quien la mira? (vendedor: solicitud o
 /// ajuste por atender; comprador: oferta vigente por responder). Misma regla
 /// que ya usaba la tarjeta; ahora también la usan las pestañas.
-bool cotizacionRequiereAccion(QuoteRequest q, {required bool verComoVendedor}) => verComoVendedor
+bool cotizacionRequiereAccion(QuoteRequest q, {required bool verComoVendedor}) => q.estadoDesconocido
+    ? false // un estado que esta versión no conoce nunca se presenta como una acción pendiente
+    : verComoVendedor
     ? QuoteStateMachine.requiereRespuestaDelVendedor(q.estado)
     : q.estadoEfectivo() == EstadoCotizacion.ofertaEnviada;
 
@@ -63,7 +69,7 @@ class QuoteCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final q = cotizacion;
     final estado = q.estadoEfectivo();
-    final otro = verComoVendedor ? q.compradorNombre : q.sellerNombre;
+    final otro = verComoVendedor ? q.compradorNombreVisible : q.sellerNombreVisible;
     final accion = cotizacionRequiereAccion(q, verComoVendedor: verComoVendedor);
     return ActivityCard(
       foto: q.loteFoto,
@@ -75,7 +81,7 @@ class QuoteCard extends StatelessWidget {
           Text('Total ofertado: ${formatCOP(q.oferta!.totalCOP)}',
               style: const TextStyle(fontWeight: FontWeight.w800, color: AppColors.coffeeDark, fontSize: 14)),
       ],
-      estado: QuoteStatusChip(estado: estado),
+      estado: QuoteStatusChip(estado: estado, desconocido: q.estadoDesconocido),
       fecha: formatFechaN(q.fecha),
       avisoAccion: accion ? 'Requiere tu respuesta' : null,
       onTap: onTap,

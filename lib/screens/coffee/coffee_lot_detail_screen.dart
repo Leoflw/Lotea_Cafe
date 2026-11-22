@@ -5,6 +5,7 @@ import '../../models/favorite.dart';
 import '../../models/seller_profile.dart';
 import '../../repositories/coffee_lot_repository.dart';
 import '../../repositories/favorite_repository.dart';
+import '../../repositories/repo_exception.dart';
 import '../../repositories/seller_repository.dart';
 import '../../state/activity_provider.dart';
 import '../../state/session_provider.dart';
@@ -12,6 +13,7 @@ import '../../widgets/remote_view.dart';
 import '../../theme/app_theme.dart';
 import '../../widgets/app_image.dart';
 import '../../widgets/badges.dart';
+import '../../widgets/cafe_no_disponible_view.dart';
 import '../../widgets/empty_state.dart';
 import '../../widgets/interest_dialog.dart';
 import '../../widgets/price_text.dart';
@@ -22,17 +24,27 @@ import '../seller/seller_detail_screen.dart';
 /// → perfil de taza → origen → envío → certificaciones.
 class CoffeeLotDetailScreen extends StatelessWidget {
   final String coffeeLotId;
-  const CoffeeLotDetailScreen({super.key, required this.coffeeLotId});
+
+  /// Datos guardados de una solicitud o conversación existente. Solo se usan, en solo lectura,
+  /// si la ficha no se puede leer (café suspendido, despublicado o eliminado).
+  final LoteRespaldo? respaldo;
+  const CoffeeLotDetailScreen({super.key, required this.coffeeLotId, this.respaldo});
 
   @override
   Widget build(BuildContext context) {
     final lots = context.read<CoffeeLotRepository>();
     return StreamView<CoffeeLot?>(
       crear: () => lots.observar(coffeeLotId),
-      builder: (context, lote) {
-        if (lote == null) {
-          return Scaffold(appBar: AppBar(), body: const EmptyState(icono: Icons.error_outline, titulo: 'Café no encontrado'));
+      // Las reglas no dejan leer a terceros un café que no está publicado (suspendido incluido):
+      // eso llega como «sin permisos» o «no encontrado». Se muestra indisponibilidad, no un error técnico.
+      errorBuilder: (context, error, reintentar) {
+        if (error.tipo == RepoErrorKind.sinPermisos || error.tipo == RepoErrorKind.noEncontrado) {
+          return CafeNoDisponibleView(respaldo: respaldo);
         }
+        return Scaffold(appBar: AppBar(), body: RepoErrorView(error: error, onReintentar: reintentar));
+      },
+      builder: (context, lote) {
+        if (lote == null) return CafeNoDisponibleView(respaldo: respaldo);
         return _ConVendedor(lote: lote);
       },
     );

@@ -51,6 +51,23 @@ class QuoteRepository {
     return traducirErrores(s);
   }
 
+  /// Cuántas cotizaciones tiene el café [coffeeLotId] de este vendedor: un `count()` exacto en
+  /// el servidor (sin descargar documentos y sin el límite de 100 de las listas en tiempo
+  /// real). Solo igualdades: no necesita un índice compuesto. Si no se puede calcular lanza
+  /// [RepoException]; nunca devuelve 0 por un fallo.
+  Future<int> contarDeLote({required String sellerId, required String coffeeLotId}) => guardar(() async {
+        final agg = await _col
+            .where('sellerId', isEqualTo: sellerId)
+            .where('coffeeLotId', isEqualTo: coffeeLotId)
+            .count()
+            .get();
+        final int? total = agg.count;
+        if (total == null) {
+          throw const RepoException(RepoErrorKind.otro, 'No se pudo calcular el número de cotizaciones de este café.');
+        }
+        return total;
+      });
+
   Stream<QuoteRequest?> observar(String id) {
     return traducirErrores(_col.doc(id).snapshots().map((d) => d.exists ? _desde(d) : null));
   }
@@ -300,6 +317,10 @@ class QuoteRepository {
           throw const RepoException(RepoErrorKind.sinPermisos, 'No participas en esta cotización.');
         }
 
+        if (actual.estadoDesconocido) {
+          // Estado de una versión que esta app no conoce: nunca se parte de él para una transición.
+          throw const RepoException(RepoErrorKind.transicionInvalida, 'Esta cotización está en un estado que esta versión de la app no reconoce. Actualiza la aplicación.');
+        }
         if (!QuoteStateMachine.puede(actual.estado, destino, actor)) {
           throw RepoException(
             RepoErrorKind.transicionInvalida,

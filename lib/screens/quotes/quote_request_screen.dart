@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import '../../utils/account_block.dart';
 import 'package:uuid/uuid.dart';
 import '../../models/coffee_lot.dart';
 import '../../models/interest_request.dart';
@@ -9,10 +10,12 @@ import '../../repositories/quote_repository.dart';
 import '../../repositories/repo_exception.dart';
 import '../../state/session_provider.dart';
 import '../../theme/app_theme.dart';
+import '../../utils/negociacion_restringida.dart';
 import '../../widgets/app_image.dart';
 import '../../widgets/dismiss_keyboard.dart';
 import '../../widgets/empty_state.dart';
 import '../../widgets/form_widgets.dart';
+import '../../widgets/modo_consulta_banner.dart';
 import '../../widgets/price_text.dart';
 import 'quote_detail_screen.dart';
 
@@ -38,6 +41,9 @@ class _QuoteRequestScreenState extends State<QuoteRequestScreen> {
   RepoException? _errorCarga;
   bool _cargandoLote = true;
   bool _enviando = false;
+  // Solo con permission-denied de Firestore: formulario bloqueado mientras la pantalla siga abierta.
+  bool _soloConsulta = false;
+  bool get _bloqueado => _enviando || _soloConsulta;
   String _unidad = 'kg';
   String? _error;
 
@@ -75,7 +81,8 @@ class _QuoteRequestScreenState extends State<QuoteRequestScreen> {
   }
 
   Future<void> _enviar() async {
-    if (_enviando || !_formKey.currentState!.validate()) return;
+    if (_enviando || _soloConsulta || !_formKey.currentState!.validate()) return;
+    if (avisarSiCuentaBloqueada(context)) return;
     final lote = _lote;
     final uid = context.read<SessionProvider>().usuario?.uid;
     if (lote == null || uid == null) return;
@@ -99,7 +106,15 @@ class _QuoteRequestScreenState extends State<QuoteRequestScreen> {
       if (!mounted) return;
       navigator.pushReplacement(MaterialPageRoute(builder: (_) => QuoteDetailScreen(quoteId: _quoteId)));
     } on RepoException catch (e) {
-      if (mounted) setState(() => _error = e.mensaje);
+      if (!mounted) return;
+      if (esRechazoPorPermisos(e)) {
+        setState(() {
+          _soloConsulta = true;
+          _error = null;
+        });
+      } else {
+        setState(() => _error = e.mensaje);
+      }
     } finally {
       if (mounted) setState(() => _enviando = false);
     }
@@ -114,15 +129,21 @@ class _QuoteRequestScreenState extends State<QuoteRequestScreen> {
         body: _cargandoLote
             ? const Center(child: CircularProgressIndicator(color: AppColors.coffeeMedium))
             : _errorCarga != null
-                ? RepoErrorView(error: _errorCarga!, onReintentar: _cargarLote)
+                ? (_errorCarga!.tipo == RepoErrorKind.sinPermisos || _errorCarga!.tipo == RepoErrorKind.noEncontrado
+                    ? const _CafeNoDisponibleParaCotizar()
+                    : RepoErrorView(error: _errorCarga!, onReintentar: _cargarLote))
                 : lote == null
-                    ? const EmptyState(icono: Icons.coffee_outlined, titulo: 'Este café ya no está disponible')
+                    ? const _CafeNoDisponibleParaCotizar()
                     : Form(
                         key: _formKey,
                         child: ListView(
                           keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
                           padding: const EdgeInsets.fromLTRB(20, 8, 20, 32),
                           children: [
+                            if (_soloConsulta) ...[
+                              const ModoConsultaBanner(key: ValueKey('cotizar_modo_consulta'), texto: mensajeFormularioSoloConsulta),
+                              const SizedBox(height: 14),
+                            ],
                             _ResumenCafe(lote: lote),
                             const SizedBox(height: 26),
                             FormSection(
@@ -143,7 +164,7 @@ class _QuoteRequestScreenState extends State<QuoteRequestScreen> {
                                           const FieldLabel('Cantidad', obligatorio: true),
                                           TextFormField(
                                             controller: _cantidadCtrl,
-                                            enabled: !_enviando,
+                                            enabled: !_bloqueado,
                                             keyboardType: const TextInputType.numberWithOptions(decimal: true),
                                             decoration: const InputDecoration(hintText: 'Ej: 50'),
                                             validator: (v) {
@@ -167,7 +188,7 @@ class _QuoteRequestScreenState extends State<QuoteRequestScreen> {
                                             items: QuoteLimits.unidadesPermitidas
                                                 .map((u) => DropdownMenuItem(value: u, child: Text(u, overflow: TextOverflow.ellipsis)))
                                                 .toList(),
-                                            onChanged: _enviando ? null : (v) => setState(() => _unidad = v ?? _unidad),
+                                            onChanged: _bloqueado ? null : (v) => setState(() => _unidad = v ?? _unidad),
                                           ),
                                         ],
                                       ),
@@ -184,7 +205,7 @@ class _QuoteRequestScreenState extends State<QuoteRequestScreen> {
                                 const FieldLabel('Lugar de entrega', opcional: true, ayuda: 'La ciudad o dirección donde quieres recibir el café.'),
                                 TextFormField(
                                   controller: _lugarCtrl,
-                                  enabled: !_enviando,
+                                  enabled: !_bloqueado,
                                   maxLength: QuoteLimits.maxLugar,
                                   decoration: const InputDecoration(hintText: 'Ej: Bogotá', prefixIcon: Icon(Icons.place_outlined)),
                                 ),
@@ -198,7 +219,7 @@ class _QuoteRequestScreenState extends State<QuoteRequestScreen> {
                                 const FieldLabel('Comentario', opcional: true, ayuda: 'Cualquier detalle que el vendedor deba tener en cuenta.'),
                                 TextFormField(
                                   controller: _comentarioCtrl,
-                                  enabled: !_enviando,
+                                  enabled: !_bloqueado,
                                   maxLines: 3,
                                   maxLength: QuoteLimits.maxComentario,
                                 ),
@@ -229,7 +250,7 @@ class _QuoteRequestScreenState extends State<QuoteRequestScreen> {
                             ],
                             const SizedBox(height: 18),
                             ElevatedButton(
-                              onPressed: _enviando ? null : _enviar,
+                              onPressed: _bloqueado ? null : _enviar,
                               child: _enviando
                                   ? const SizedBox(width: 22, height: 22, child: CircularProgressIndicator(strokeWidth: 2.4, color: Colors.white))
                                   : const FittedBox(fit: BoxFit.scaleDown, child: Text('Enviar solicitud de cotización')),
@@ -274,4 +295,20 @@ class _ResumenCafe extends StatelessWidget {
       ),
     );
   }
+}
+
+/// Sin ficha legible del café (suspendido, despublicado o eliminado) no se puede crear una cotización
+/// nueva: pantalla de indisponibilidad en lugar de un error técnico.
+class _CafeNoDisponibleParaCotizar extends StatelessWidget {
+  const _CafeNoDisponibleParaCotizar();
+
+  @override
+  Widget build(BuildContext context) => const EmptyState(
+        key: ValueKey('cotizar_cafe_no_disponible'),
+        icono: Icons.coffee_outlined,
+        titulo: 'Este café no está disponible por ahora',
+        subtitulo: 'No es posible crear una cotización nueva sobre este café en este momento. '
+            'Tu conversación y tus cotizaciones anteriores se conservan.',
+        tono: EmptyTone.info,
+      );
 }

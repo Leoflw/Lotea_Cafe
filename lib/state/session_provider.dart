@@ -93,6 +93,11 @@ class SessionProvider extends ChangeNotifier {
   RepoException? get error => _error;
   bool get autenticado => _status == SessionStatus.listo && _usuario != null;
   bool get esVendedor => _usuario?.rol == UserRole.vendedor;
+
+  /// La cuenta no está activa (eliminación solicitada o estado desconocido): se bloquean en pantalla
+  /// las acciones comerciales y se explica por qué. Con la sesión aún sin cargar no bloquea (las
+  /// pantallas comerciales no se muestran sin sesión); las reglas de Firestore son la protección real.
+  bool get operacionesBloqueadas => _usuario?.operacionesBloqueadas ?? false;
   String? get uid => _firebaseUser?.uid;
   String? get correo => _firebaseUser?.email;
   bool get correoVerificado => _firebaseUser?.emailVerified ?? true;

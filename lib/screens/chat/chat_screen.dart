@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
 import 'package:provider/provider.dart';
+import '../../utils/account_block.dart';
 import 'package:uuid/uuid.dart';
 import '../../models/chat_message.dart';
 import '../../models/interest_request.dart';
@@ -11,9 +12,12 @@ import '../../services/push_navigation.dart';
 import '../../state/session_provider.dart';
 import '../../theme/app_theme.dart';
 import '../../utils/focus_utils.dart';
+import '../../utils/negociacion_restringida.dart';
 import '../../utils/format_utils.dart';
 import '../../widgets/app_image.dart';
 import '../../widgets/avatar_circular.dart';
+import '../../widgets/cafe_no_disponible_view.dart';
+import '../../widgets/modo_consulta_banner.dart';
 import '../../widgets/dismiss_keyboard.dart';
 import '../../widgets/empty_state.dart';
 import '../../widgets/remote_view.dart';
@@ -37,6 +41,9 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   final _uuid = const Uuid();
   late final PushCoordinator _push;
   bool _enviando = false;
+  // Se activa cuando el servidor rechaza un mensaje por permisos: la conversación pasa a modo de
+  // consulta (historial visible, sin campo de escritura). «Volver a intentar» lo desactiva.
+  bool _soloConsulta = false;
   // Id del mensaje en curso: si el envío falla y se reintenta con el mismo
   // texto, se reutiliza el id y no se duplica.
   String? _idEnCurso;
@@ -48,6 +55,8 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   bool _marcando = false;
   DateTime? _ultimoMensajeIntentado; // evita repetir la escritura si falla
   InterestRequest? _ultimaConexion;
+  // «Cuenta eliminada» cuando la conexión marca a la otra parte como eliminada (título reactivo).
+  String? _nombreContraparteEliminada;
 
   @override
   void initState() {
@@ -102,8 +111,11 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   Future<void> _enviar() async {
     final texto = _textCtrl.text.trim();
     if (texto.isEmpty || _enviando) return;
+    if (avisarSiCuentaBloqueada(context)) return;
     final uid = context.read<SessionProvider>().usuario?.uid;
     if (uid == null) return;
+    // La otra persona eliminó su cuenta: el chat es solo historial (no se intenta enviar nada).
+    if (_ultimaConexion?.nombreSiContraparteEliminada(uid) != null) return;
     final repo = context.read<ChatRepository>();
     if (_textoEnCurso != texto) {
       _idEnCurso = _uuid.v4();
@@ -117,7 +129,17 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       _textoEnCurso = null;
     } on RepoException catch (e) {
       // El texto se conserva en el campo para poder reintentar.
-      if (mounted) mostrarError(context, e);
+      if (!mounted) return;
+      if (esRechazoPorPermisos(e)) {
+        // Rechazo de las reglas: no hay mensaje enviado ni falso éxito; el historial no se toca y el borrador
+        // se conserva en el controlador. El aviso persistente de modo de consulta (con «Volver a intentar»)
+        // ya lo explica: no se muestra un SnackBar porque quedaría sobre ese botón. Si había uno de un error
+        // anterior en pantalla, se retira por la misma razón.
+        ScaffoldMessenger.of(context).hideCurrentSnackBar();
+        setState(() => _soloConsulta = true);
+      } else {
+        mostrarError(context, e);
+      }
     } finally {
       if (mounted) setState(() => _enviando = false);
     }
@@ -128,7 +150,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     final miUid = context.read<SessionProvider>().usuario?.uid;
     final conexiones = context.read<InterestRequestRepository>();
     final chats = context.read<ChatRepository>();
-    final nombre = widget.otroNombre.isEmpty ? 'Chat' : widget.otroNombre;
+    final nombre = _nombreContraparteEliminada ?? (widget.otroNombre.isEmpty ? 'Chat' : widget.otroNombre);
     return PopScope(
       onPopInvokedWithResult: (didPop, _) => liberarFoco(),
       child: DismissKeyboard(
@@ -155,11 +177,19 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                 );
               }
               final soyComprador = miUid == conexion.compradorId;
+              // Depende SOLO del marcador de la OTRA persona (no del propio usuario ni de un rechazo de Firestore).
+              final contraparteEliminada = conexion.nombreSiContraparteEliminada(miUid) != null;
               _ultimaConexion = conexion;
+              final eliminada = conexion.nombreSiContraparteEliminada(miUid);
+              if (eliminada != null && eliminada != _nombreContraparteEliminada) {
+                WidgetsBinding.instance.addPostFrameCallback((_) {
+                  if (mounted) setState(() => _nombreContraparteEliminada = eliminada);
+                });
+              }
               WidgetsBinding.instance.addPostFrameCallback((_) => _marcarLeidoSiHaceFalta(conexion));
               return Column(
                 children: [
-                  _Encabezado(conexion: conexion, soyComprador: soyComprador),
+                  _Encabezado(conexion: conexion, soyComprador: soyComprador, soloConsulta: _soloConsulta || contraparteEliminada),
                   Expanded(
                     child: StreamView<List<ChatMessage>>(
                       crear: () => chats.observar(widget.interestRequestId),
@@ -190,11 +220,36 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                       },
                     ),
                   ),
-                  _BarraEscritura(
-                    controller: _textCtrl,
-                    enviando: _enviando,
-                    onEnviar: _enviar,
-                  ),
+                  if (contraparteEliminada) ...[
+                    // Permanente: sin «Volver a intentar». El campo sigue visible pero deshabilitado, así el
+                    // borrador que hubiera no se pierde en silencio.
+                    Padding(
+                      padding: const EdgeInsets.fromLTRB(12, 8, 12, 4),
+                      child: ModoConsultaBanner(
+                        key: const ValueKey('chat_cuenta_eliminada'),
+                        texto: mensajeChatContraparteEliminada,
+                      ),
+                    ),
+                    _BarraEscritura(controller: _textCtrl, enviando: _enviando, onEnviar: _enviar, bloqueada: true),
+                  ] else if (_soloConsulta)
+                    SafeArea(
+                      top: false,
+                      child: Padding(
+                        padding: const EdgeInsets.fromLTRB(12, 8, 12, 8),
+                        child: ModoConsultaBanner(
+                          key: const ValueKey('chat_modo_consulta'),
+                          texto: mensajeChatSoloConsulta,
+                          botonReintentarKey: const ValueKey('chat_volver_a_intentar'),
+                          onReintentar: () => setState(() => _soloConsulta = false),
+                        ),
+                      ),
+                    )
+                  else
+                    _BarraEscritura(
+                      controller: _textCtrl,
+                      enviando: _enviando,
+                      onEnviar: _enviar,
+                    ),
                 ],
               );
             },
@@ -230,7 +285,9 @@ class _BarraEscritura extends StatelessWidget {
   final TextEditingController controller;
   final bool enviando;
   final VoidCallback onEnviar;
-  const _BarraEscritura({required this.controller, required this.enviando, required this.onEnviar});
+  /// Chat solo de consulta permanente: campo y botón de envío deshabilitados (el texto se conserva).
+  final bool bloqueada;
+  const _BarraEscritura({required this.controller, required this.enviando, required this.onEnviar, this.bloqueada = false});
 
   @override
   Widget build(BuildContext context) {
@@ -248,12 +305,12 @@ class _BarraEscritura extends StatelessWidget {
               Expanded(
                 child: TextField(
                   controller: controller,
-                  enabled: !enviando,
+                  enabled: !enviando && !bloqueada,
                   textInputAction: TextInputAction.send,
                   textCapitalization: TextCapitalization.sentences,
                   maxLength: ChatRepository.maxCaracteres,
                   buildCounter: (_, {required currentLength, required isFocused, maxLength}) => null,
-                  onSubmitted: (_) => onEnviar(),
+                  onSubmitted: bloqueada ? null : (_) => onEnviar(),
                   decoration: InputDecoration(
                     hintText: 'Escribe un mensaje…',
                     contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
@@ -281,7 +338,7 @@ class _BarraEscritura extends StatelessWidget {
                           : IconButton(
                               tooltip: 'Enviar',
                               icon: const Icon(Icons.send_rounded, color: Colors.white, size: 20),
-                              onPressed: onEnviar,
+                              onPressed: bloqueada ? null : onEnviar,
                             ),
                     ),
                   );
@@ -298,7 +355,9 @@ class _BarraEscritura extends StatelessWidget {
 class _Encabezado extends StatelessWidget {
   final InterestRequest conexion;
   final bool soyComprador;
-  const _Encabezado({required this.conexion, required this.soyComprador});
+  // En modo de consulta «Cotizar» (iniciar una operación comercial) queda deshabilitado; «Ver café» sigue.
+  final bool soloConsulta;
+  const _Encabezado({required this.conexion, required this.soyComprador, this.soloConsulta = false});
 
   @override
   Widget build(BuildContext context) {
@@ -322,13 +381,13 @@ class _Encabezado extends StatelessWidget {
             ),
           ),
           TextButton(
-            onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => CoffeeLotDetailScreen(coffeeLotId: conexion.coffeeLotId))),
+            onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => CoffeeLotDetailScreen(coffeeLotId: conexion.coffeeLotId, respaldo: LoteRespaldo.desdeConexion(conexion)))),
             style: TextButton.styleFrom(minimumSize: const Size(48, 44), padding: const EdgeInsets.symmetric(horizontal: 10)),
             child: const Text('Ver café'),
           ),
           if (soyComprador)
             TextButton(
-              onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => QuoteRequestScreen(conexion: conexion))),
+              onPressed: soloConsulta ? null : () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => QuoteRequestScreen(conexion: conexion))),
               style: TextButton.styleFrom(minimumSize: const Size(48, 44), padding: const EdgeInsets.symmetric(horizontal: 10)),
               child: const Text('Cotizar'),
             ),

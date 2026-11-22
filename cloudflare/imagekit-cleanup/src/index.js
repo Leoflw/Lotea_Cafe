@@ -1,6 +1,6 @@
 // Cloudflare Worker de limpieza de imágenes de ImageKit — Lotea Café.
 //
-// Dos entradas:
+// Tres entradas (la última, `/account-deletion/*`, vive en account-deletion.js):
 //  - POST /  (la app, tras guardar un lote o perfil): con el ID token de Firebase
 //    procesa la cola DEL PROPIO USUARIO. El cuerpo se ignora: la app no envía
 //    ningún fileId; los ids salen de la cola y se validan uno a uno.
@@ -17,6 +17,7 @@ import { AuthError, verifyIdToken } from './firebase.js';
 import { esProcesable, procesarSolicitud } from './cleanup.js';
 import { listarColaDeUsuario, listarColaGlobal } from './firestore.js';
 import { COLECCION as LOTES, procesarBorradoLote } from './lotes.js';
+import { manejarCuenta, resetLimitadorCuentas } from './account-deletion.js';
 
 // Presupuesto de subpeticiones (plan gratuito: 50 por invocación): una eliminación de lote usa
 // ≈11 y una foto ≈8 (con las 4 comprobaciones de uso), más ≈10 de listados y autenticación.
@@ -27,6 +28,7 @@ const LIMITE = { max: 20, ventanaMs: 10 * 60 * 1000 }; // 20 llamadas / 10 min /
 const usos = new Map();
 export function resetLimitador() {
   usos.clear();
+  resetLimitadorCuentas();
 }
 function excedeLimite(uid, nowMs) {
   const recientes = (usos.get(uid) || []).filter((t) => nowMs - t < LIMITE.ventanaMs);
@@ -78,11 +80,14 @@ async function procesarLote(env, { fotos, lotes = [] }, deps) {
 }
 
 export async function handle(request, env, deps = {}) {
-  const d = { fetchFn: deps.fetch ?? fetch, nowMs: deps.nowMs ?? Date.now() };
+  const d = { fetchFn: deps.fetch ?? fetch, nowMs: deps.nowMs ?? Date.now(), idFn: deps.idFn };
   const url = new URL(request.url);
 
   if (url.protocol !== 'https:' && env.ALLOW_HTTP !== 'true') return error(400, 'Se requiere HTTPS.');
   if (request.method !== 'POST') return error(405, 'Método no permitido.');
+  // Ciclo de vida de cuentas (etapa 6): módulo propio, límite propio y sin depender de la clave de ImageKit.
+  if (url.pathname === '/account-deletion/request') return manejarCuenta(request, env, d, 'solicitar');
+  if (url.pathname === '/account-deletion/cancel') return manejarCuenta(request, env, d, 'cancelar');
   if (url.pathname !== '/') return error(404, 'No encontrado.');
   if (!configurado(env)) return error(500, 'El Worker no está configurado.');
 

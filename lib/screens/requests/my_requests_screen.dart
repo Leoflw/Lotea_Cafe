@@ -7,6 +7,7 @@ import '../../utils/format_utils.dart';
 import '../../widgets/activity_card.dart';
 import '../../widgets/connection_tile.dart';
 import '../../widgets/empty_state.dart';
+import '../../widgets/cafe_no_disponible_view.dart';
 import '../../widgets/remote_view.dart';
 import '../../widgets/status_pill.dart';
 import '../../widgets/unread_badge.dart';
@@ -133,21 +134,21 @@ class _ListaEnviadas extends StatelessWidget {
         return ActivityCard(
           foto: s.loteFoto,
           titulo: s.loteNombre.isEmpty ? 'Café' : s.loteNombre,
-          subtitulo: s.sellerNombre.isEmpty ? 'Vendedor' : s.sellerNombre,
+          subtitulo: s.sellerNombreVisible.isEmpty ? 'Vendedor' : s.sellerNombreVisible,
           detalles: [
             if (s.lotePrecioCOP != null)
               Text(formatCOPPorUnidad(s.lotePrecioCOP!, s.loteUnidad ?? 'kg'),
                   style: const TextStyle(fontWeight: FontWeight.w800, color: AppColors.coffeeDark, fontSize: 14)),
-            if (s.estado == EstadoSolicitud.pendiente)
+            if (s.esPendienteAbierta)
               Padding(
                 padding: const EdgeInsets.only(top: 2),
                 child: Text('Esperando la respuesta del vendedor', style: Theme.of(context).textTheme.bodySmall),
               ),
           ],
-          estado: RequestStatusChip(estado: s.estado),
+          estado: RequestStatusChip(estado: s.estado, desconocido: s.estadoDesconocido),
           fecha: 'Enviada ${formatFechaN(s.fecha)}',
           trailing: TextButton(
-            onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => CoffeeLotDetailScreen(coffeeLotId: s.coffeeLotId))),
+            onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => CoffeeLotDetailScreen(coffeeLotId: s.coffeeLotId, respaldo: LoteRespaldo.desdeConexion(s)))),
             style: TextButton.styleFrom(padding: const EdgeInsets.symmetric(horizontal: 6), minimumSize: const Size(40, 28)),
             child: const Text('Ver café', style: TextStyle(fontSize: 12)),
           ),
@@ -157,7 +158,7 @@ class _ListaEnviadas extends StatelessWidget {
           avisoIcono: Icons.chat_bubble_outline,
           onTap: aceptada
               ? () => Navigator.of(context).push(MaterialPageRoute(
-                    builder: (_) => ChatScreen(interestRequestId: s.id, otroNombre: s.sellerNombre),
+                    builder: (_) => ChatScreen(interestRequestId: s.id, otroNombre: s.sellerNombreVisible),
                   ))
               : null,
         );
@@ -191,7 +192,7 @@ class _ListaConexiones extends StatelessWidget {
         final porResponder = cotizaciones.any((q) => cotizacionRequiereAccion(q, verComoVendedor: false));
         return ConnectionTile(
           foto: c.loteFoto,
-          titulo: c.sellerNombre.isEmpty ? 'Vendedor' : c.sellerNombre,
+          titulo: c.sellerNombreVisible.isEmpty ? 'Vendedor' : c.sellerNombreVisible,
           subtitulo: c.loteNombre,
           meta: c.fecha == null ? null : 'Interés enviado el ${formatFecha(c.fecha!)}',
           noLeido: noLeido,
@@ -207,7 +208,7 @@ class _ListaConexiones extends StatelessWidget {
             onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => QuoteRequestScreen(conexion: c))),
           ),
           onAbrirChat: () => Navigator.of(context).push(MaterialPageRoute(
-            builder: (_) => ChatScreen(interestRequestId: c.id, otroNombre: c.sellerNombre),
+            builder: (_) => ChatScreen(interestRequestId: c.id, otroNombre: c.sellerNombreVisible),
           )),
         );
       },

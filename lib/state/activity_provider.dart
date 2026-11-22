@@ -4,6 +4,7 @@ import '../models/app_user.dart';
 import '../models/coffee_lot.dart';
 import '../models/favorite.dart';
 import '../models/interest_request.dart';
+import '../models/lot_deletion.dart';
 import '../models/quote_request.dart';
 import '../models/seller_profile.dart';
 import '../repositories/coffee_lot_repository.dart';
@@ -49,6 +50,7 @@ class ActivityProvider extends ChangeNotifier {
   Remote<List<Favorite>> _favoritos = const Remote.cargando();
   Remote<List<CoffeeLot>> _lotesPropios = const Remote.cargando();
   Remote<SellerProfile?> _perfilVendedor = const Remote.cargando();
+  Remote<Map<String, EstadoEliminacionLote>> _eliminaciones = const Remote.cargando();
   final List<String> _descartes = [];
 
   Remote<List<InterestRequest>> get solicitudes => _solicitudes;
@@ -56,6 +58,7 @@ class ActivityProvider extends ChangeNotifier {
   Remote<List<Favorite>> get favoritos => _favoritos;
   Remote<List<CoffeeLot>> get lotesPropios => _lotesPropios;
   Remote<SellerProfile?> get perfilVendedor => _perfilVendedor;
+  Remote<Map<String, EstadoEliminacionLote>> get eliminaciones => _eliminaciones;
 
   /// Se llama desde ProxyProvider cada vez que cambia la sesión.
   void actualizarSesion(SessionProvider sesion) {
@@ -96,6 +99,8 @@ class ActivityProvider extends ChangeNotifier {
           (d) => _perfilVendedor = Remote.listo(d), (e) => _perfilVendedor = Remote.error(e));
       _escuchar<List<CoffeeLot>>(_lots.observarDeVendedor(uid),
           (d) => _lotesPropios = Remote.listo(d), (e) => _lotesPropios = Remote.error(e));
+      _escuchar<Map<String, EstadoEliminacionLote>>(_lots.observarEliminaciones(uid),
+          (d) => _eliminaciones = Remote.listo(d), (e) => _eliminaciones = Remote.error(e));
       _escuchar<List<InterestRequest>>(_requests.observarRecibidas(uid),
           (d) => _solicitudes = Remote.listo(d), (e) => _solicitudes = Remote.error(e));
       _escuchar<List<QuoteRequest>>(_quotes.observarComoVendedor(uid),
@@ -113,6 +118,7 @@ class ActivityProvider extends ChangeNotifier {
     _favoritos = const Remote.cargando();
     _lotesPropios = const Remote.cargando();
     _perfilVendedor = const Remote.cargando();
+    _eliminaciones = const Remote.cargando();
     _descartes.clear();
   }
 
@@ -134,7 +140,7 @@ class ActivityProvider extends ChangeNotifier {
 
   List<InterestRequest> get conexiones => listaSolicitudes.where((s) => s.esConexion).toList();
   List<InterestRequest> get pendientes =>
-      listaSolicitudes.where((s) => s.estado == EstadoSolicitud.pendiente).toList();
+      listaSolicitudes.where((s) => s.esPendienteAbierta).toList();
 
   /// ¿La conexión [c] tiene mensajes recibidos que la persona con sesión
   /// iniciada aún no ha leído? (los que ella envió nunca cuentan).
@@ -155,15 +161,24 @@ class ActivityProvider extends ChangeNotifier {
 
   /// Cotizaciones que esperan una acción del vendedor.
   int get cotizacionesPorResponder => listaCotizaciones
-      .where((c) => QuoteStateMachine.requiereRespuestaDelVendedor(c.estado))
+      .where((c) => !c.estadoDesconocido && QuoteStateMachine.requiereRespuestaDelVendedor(c.estado))
       .length;
 
   /// Ofertas que esperan respuesta del comprador (vigentes).
   int get ofertasPorResponder =>
       listaCotizaciones.where((c) => c.estadoEfectivo() == EstadoCotizacion.ofertaEnviada).length;
 
+  /// Estado de eliminación de cada café propio (solo los que tienen solicitud). Mientras carga
+  /// o si falla queda vacío: la pantalla de catálogo espera a [eliminaciones] antes de pintar.
+  Map<String, EstadoEliminacionLote> get eliminacionesPropias =>
+      _eliminaciones.listo ? _eliminaciones.data : const <String, EstadoEliminacionLote>{};
+
+  EstadoEliminacionLote? eliminacionDe(String lotId) => eliminacionesPropias[lotId];
+
   int get lotesPublicados => listaLotesPropios.where((l) => l.publicado).length;
-  int get lotesBorrador => listaLotesPropios.where((l) => !l.publicado).length;
+
+  /// Borradores reales: un café cuya eliminación está en proceso (o fallida) no cuenta.
+  int get lotesBorrador => listaLotesPropios.where((l) => l.estado == EstadoLote.borrador && eliminacionDe(l.id) == null).length;
 
   /// Ids de lotes sobre los que el comprador ya tiene una solicitud activa
   /// (pendiente o aceptada): no se vuelven a ofrecer en Descubrir.

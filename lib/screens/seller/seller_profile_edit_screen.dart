@@ -2,6 +2,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:provider/provider.dart';
+import '../../utils/account_block.dart';
 import '../../models/seller_profile.dart';
 import '../../repositories/image_repository.dart';
 import '../../repositories/repo_exception.dart';
@@ -193,6 +194,7 @@ class _SellerProfileEditScreenState extends State<SellerProfileEditScreen> {
   }
 
   Future<void> _guardar() async {
+    if (avisarSiCuentaBloqueada(context)) return;
     if (_guardando) return;
     if (!_formKey.currentState!.validate()) {
       // Antes se salía sin avisar; con el formulario en secciones el campo

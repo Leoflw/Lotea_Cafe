@@ -38,6 +38,7 @@ const valor = (v) => {
   if (v === null || v === undefined) return { nullValue: null };
   if (typeof v === 'string') return { stringValue: v };
   if (typeof v === 'number') return { integerValue: String(v) };
+  if (v instanceof Date) return { timestampValue: v.toISOString() };
   if (Array.isArray(v)) return { arrayValue: { values: v.map(valor) } };
   throw new Error('tipo no soportado en la prueba');
 };
@@ -57,6 +58,8 @@ export function crearMundo() {
     llamadas: [], // registro { tipo, ... }
     fallos: {}, // p. ej. { imagekitBorrar: [503], firestoreConsulta: [500] } (se consume 1 por llamada)
     reloj: 0,
+    txs: new Map(), // transacción -> { docs: Map(ruta -> updateTime|null), consultas: [{ from, where, limit, rutas }], abierta }
+    txN: 0,
     escrituras: [], // todo lo que el Worker escribió: { ruta, campos }
     claves: null,
     fetch: null,
@@ -127,6 +130,20 @@ export function crearMundo() {
     if (u.host === 'firestore.googleapis.com') {
       const base = `/v1/projects/${PROYECTO}/databases/(default)/documents`;
       const rel = decodeURIComponent(u.pathname.slice(base.length)).replace(/^\//, '');
+      if (rel === ':beginTransaction') {
+        mundo.llamadas.push({ tipo: 'txInicio' });
+        const f = fallo('firestoreBeginTx');
+        if (f) return resp(f, {});
+        const id = `tx-${++mundo.txN}`;
+        mundo.txs.set(id, { docs: new Map(), consultas: [], abierta: true });
+        return resp(200, { transaction: id });
+      }
+      if (rel === ':rollback') {
+        mundo.llamadas.push({ tipo: 'txRollback' });
+        const t = mundo.txs.get(JSON.parse(init.body).transaction);
+        if (t) t.abierta = false;
+        return resp(200, {});
+      }
       if (rel === ':runQuery') {
         const q = JSON.parse(init.body).structuredQuery;
         const from = q.from[0];
@@ -142,6 +159,8 @@ export function crearMundo() {
           out.push({ document: documento(ruta) });
           if (out.length >= (q.limit ?? 1000)) break;
         }
+        const txId = JSON.parse(init.body).transaction;
+        if (txId) mundo.txs.get(txId).consultas.push({ from, where: q.where, limit: q.limit ?? 1000, rutas: out.map((o) => o.document.name.slice(`projects/${PROYECTO}/databases/(default)/documents/`.length)) });
         return resp(200, out.length ? out : [{ readTime: 'x' }]);
       }
       if (rel === ':commit') {
@@ -152,10 +171,31 @@ export function crearMundo() {
         const hook = mundo.antesDeCommit?.(writes);
         if (hook) return resp(hook, {});
         const prefijo = `projects/${PROYECTO}/databases/(default)/documents/`;
+        const txId = JSON.parse(init.body).transaction;
+        if (txId) {
+          const t = mundo.txs.get(txId);
+          if (!t || !t.abierta) return resp(409, { error: { status: 'ABORTED' } });
+          t.abierta = false;
+          // Conflicto si cambió un documento leído o el conjunto de resultados de una consulta leída.
+          for (const [ruta, antes] of t.docs) if ((mundo.docs.get(ruta)?.updateTime ?? null) !== antes) return resp(409, { error: { status: 'ABORTED' } });
+          for (const c of t.consultas) {
+            const ahora = [];
+            for (const [ruta] of mundo.docs) {
+              const seg = ruta.split('/');
+              if (!(seg.length === 2 && seg[0] === c.from.collectionId)) continue;
+              if (c.where && !coincide(mundo.docs.get(ruta), c.where)) continue;
+              ahora.push(ruta);
+              if (ahora.length >= c.limit) break;
+            }
+            if (ahora.join('|') !== c.rutas.join('|')) return resp(409, { error: { status: 'ABORTED' } });
+          }
+        }
         // Atómico: se valida todo antes de aplicar nada.
         for (const w of writes) {
           const ruta = w.update.name.slice(prefijo.length);
           const existe = mundo.docs.has(ruta);
+          const pre = w.currentDocument?.updateTime;
+          if (pre !== undefined && (!existe || mundo.docs.get(ruta).updateTime !== pre)) return resp(400, { error: { status: 'FAILED_PRECONDITION' } });
           if (w.currentDocument?.exists === true && !existe) return resp(404, { error: { status: 'NOT_FOUND' } });
           if (w.currentDocument?.exists === false && existe) return resp(409, { error: { status: 'ALREADY_EXISTS' } });
         }
@@ -182,6 +222,8 @@ export function crearMundo() {
       }
       if (metodo === 'GET' && rel.split('/').length % 2 === 0) {
         mundo.llamadas.push({ tipo: 'leerDoc', ruta: rel });
+        const txId = u.searchParams.get('transaction');
+        if (txId) mundo.txs.get(txId).docs.set(rel, mundo.docs.get(rel)?.updateTime ?? null);
         return mundo.docs.has(rel) ? resp(200, documento(rel)) : resp(404, {});
       }
       if (metodo === 'GET') {

@@ -1,13 +1,16 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import '../../utils/account_block.dart';
 import '../../models/quote_request.dart';
 import '../../repositories/quote_repository.dart';
 import '../../repositories/repo_exception.dart';
 import '../../state/session_provider.dart';
 import '../../theme/app_theme.dart';
 import '../../utils/format_utils.dart';
+import '../../utils/negociacion_restringida.dart';
 import '../../widgets/dismiss_keyboard.dart';
 import '../../widgets/form_widgets.dart';
+import '../../widgets/modo_consulta_banner.dart';
 import 'quote_widgets.dart';
 
 /// El vendedor responde una solicitud con una oferta concreta. Los importes
@@ -29,7 +32,12 @@ class _OfferFormScreenState extends State<OfferFormScreen> {
   late final _mensajeCtrl = TextEditingController();
   DateTime? _vigencia = DateTime.now().add(const Duration(days: 7));
   bool _enviando = false;
+  // Se activa SOLO cuando Firestore responde permission-denied: el formulario queda bloqueado
+  // (datos visibles, sin envío) mientras esta pantalla siga abierta. Salir es siempre posible.
+  bool _soloConsulta = false;
   String? _error;
+
+  bool get _bloqueado => _enviando || _soloConsulta;
 
   @override
   void dispose() {
@@ -51,6 +59,7 @@ class _OfferFormScreenState extends State<OfferFormScreen> {
   }
 
   Future<void> _elegirVigencia() async {
+    if (_soloConsulta) return;
     final hoy = DateTime.now();
     final f = await showDatePicker(
       context: context,
@@ -62,7 +71,8 @@ class _OfferFormScreenState extends State<OfferFormScreen> {
   }
 
   Future<void> _enviar() async {
-    if (_enviando || !_formKey.currentState!.validate()) return;
+    if (_enviando || _soloConsulta || !_formKey.currentState!.validate()) return;
+    if (avisarSiCuentaBloqueada(context)) return;
     final uid = context.read<SessionProvider>().usuario?.uid;
     if (uid == null) return;
     final navigator = Navigator.of(context);
@@ -84,7 +94,17 @@ class _OfferFormScreenState extends State<OfferFormScreen> {
       );
       if (mounted) navigator.pop(true);
     } on RepoException catch (e) {
-      if (mounted) setState(() => _error = e.mensaje);
+      if (!mounted) return;
+      if (esRechazoPorPermisos(e)) {
+        // Rechazo real de las reglas: no hay éxito, los datos escritos se conservan y se bloquea el envío.
+        setState(() {
+          _soloConsulta = true;
+          _error = null;
+        });
+      } else {
+        // Conexión, tiempo agotado, validación u otro error: se muestra y se puede reintentar.
+        setState(() => _error = e.mensaje);
+      }
     } finally {
       if (mounted) setState(() => _enviando = false);
     }
@@ -106,6 +126,10 @@ class _OfferFormScreenState extends State<OfferFormScreen> {
             keyboardDismissBehavior: ScrollViewKeyboardDismissBehavior.onDrag,
             padding: const EdgeInsets.fromLTRB(20, 8, 20, 32),
             children: [
+              if (_soloConsulta) ...[
+                const ModoConsultaBanner(key: ValueKey('oferta_modo_consulta'), texto: mensajeFormularioSoloConsulta),
+                const SizedBox(height: 14),
+              ],
               // ---------- LO QUE PIDE EL COMPRADOR ----------
               Container(
                 padding: const EdgeInsets.all(14),
@@ -113,7 +137,7 @@ class _OfferFormScreenState extends State<OfferFormScreen> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text('${q.compradorNombre} solicita', style: textTheme.labelMedium),
+                    Text('${q.compradorNombreVisible} solicita', style: textTheme.labelMedium),
                     const SizedBox(height: 2),
                     Text(q.loteNombre, style: textTheme.headlineSmall?.copyWith(fontSize: 21, height: 1.15)),
                     const SizedBox(height: 6),
@@ -164,7 +188,7 @@ class _OfferFormScreenState extends State<OfferFormScreen> {
                   FieldLabel('Precio por ${q.unidad}', obligatorio: true),
                   TextFormField(
                     controller: _precioCtrl,
-                    enabled: !_enviando,
+                    enabled: !_bloqueado,
                     keyboardType: TextInputType.number,
                     decoration: const InputDecoration(hintText: 'Ej: 32000', prefixText: r'$ ', suffixText: 'COP'),
                     validator: (v) => QuoteValidator.oferta(
@@ -177,7 +201,7 @@ class _OfferFormScreenState extends State<OfferFormScreen> {
                   const FieldLabel('Costo de envío', opcional: true, ayuda: 'Escribe 0 si no aplica.'),
                   TextFormField(
                     controller: _envioCtrl,
-                    enabled: !_enviando,
+                    enabled: !_bloqueado,
                     keyboardType: TextInputType.number,
                     decoration: const InputDecoration(prefixText: r'$ ', suffixText: 'COP'),
                     validator: (v) {
@@ -198,7 +222,7 @@ class _OfferFormScreenState extends State<OfferFormScreen> {
                   const FieldLabel('Tiempo estimado de entrega', obligatorio: true, ayuda: 'Por ejemplo: 5 días hábiles.'),
                   TextFormField(
                     controller: _entregaCtrl,
-                    enabled: !_enviando,
+                    enabled: !_bloqueado,
                     maxLength: QuoteLimits.maxTiempoEntrega,
                     decoration: const InputDecoration(hintText: 'Ej: 5 días hábiles'),
                     validator: (v) => (v == null || v.trim().isEmpty) ? 'Indica el tiempo de entrega' : null,
@@ -209,8 +233,8 @@ class _OfferFormScreenState extends State<OfferFormScreen> {
                     leading: const Icon(Icons.event_outlined, color: AppColors.coffeeMedium),
                     title: Text(_vigencia == null ? 'Sin fecha de vigencia' : 'Válida hasta ${formatFecha(_vigencia!)}'),
                     trailing: Wrap(children: [
-                      if (_vigencia != null) IconButton(tooltip: 'Quitar vigencia', icon: const Icon(Icons.close), onPressed: () => setState(() => _vigencia = null)),
-                      TextButton(onPressed: _enviando ? null : _elegirVigencia, child: const Text('Cambiar')),
+                      if (_vigencia != null) IconButton(tooltip: 'Quitar vigencia', icon: const Icon(Icons.close), onPressed: _soloConsulta ? null : () => setState(() => _vigencia = null)),
+                      TextButton(onPressed: _bloqueado ? null : _elegirVigencia, child: const Text('Cambiar')),
                     ]),
                   ),
                 ],
@@ -226,7 +250,7 @@ class _OfferFormScreenState extends State<OfferFormScreen> {
                   const FieldLabel('Condiciones comerciales', ayuda: 'Formas de pago, entrega u otros acuerdos que propones.'),
                   TextFormField(
                     controller: _condicionesCtrl,
-                    enabled: !_enviando,
+                    enabled: !_bloqueado,
                     maxLines: 3,
                     maxLength: QuoteLimits.maxCondiciones,
                   ),
@@ -234,7 +258,7 @@ class _OfferFormScreenState extends State<OfferFormScreen> {
                   const FieldLabel('Mensaje para el comprador'),
                   TextFormField(
                     controller: _mensajeCtrl,
-                    enabled: !_enviando,
+                    enabled: !_bloqueado,
                     maxLines: 2,
                     maxLength: QuoteLimits.maxMensaje,
                   ),
@@ -297,7 +321,7 @@ class _OfferFormScreenState extends State<OfferFormScreen> {
                             const SizedBox(width: 12),
                             Expanded(
                               child: ElevatedButton(
-                                onPressed: _enviando ? null : _enviar,
+                                onPressed: _bloqueado ? null : _enviar,
                                 child: _enviando
                                     ? const SizedBox(width: 22, height: 22, child: CircularProgressIndicator(strokeWidth: 2.4, color: Colors.white))
                                     : const Text('Enviar oferta'),

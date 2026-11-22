@@ -1,4 +1,5 @@
 import '../data/codec.dart';
+import 'cuenta_eliminada.dart';
 
 /// Ciclo de vida de una cotización. Cada estado dice QUIÉN actuó: no existe
 /// un estado ambiguo como "aceptada" sin indicar si fue la oferta o la
@@ -355,6 +356,12 @@ class QuoteRequest {
   final String loteNombre;
   final String? loteFoto;
 
+  // Marcadores OPCIONALES de cuenta eliminada y estado desconocido (ver InterestRequest).
+  final bool compradorEliminado;
+  final bool sellerEliminado;
+  final DateTime? anonimizadoEn;
+  final bool estadoDesconocido;
+
   const QuoteRequest({
     required this.id,
     required this.interestRequestId,
@@ -374,10 +381,20 @@ class QuoteRequest {
     this.sellerNombre = '',
     this.loteNombre = '',
     this.loteFoto,
+    this.compradorEliminado = false,
+    this.sellerEliminado = false,
+    this.anonimizadoEn,
+    this.estadoDesconocido = false,
   });
 
   /// Estado que se muestra: una oferta enviada cuya vigencia ya pasó se ve
   /// como vencida aunque en Firestore siga como `ofertaEnviada`.
+  /// `true` si [raw] (el valor de `estado` de un documento) existe pero no es un estado conocido.
+  static bool estadoEsDesconocido(Object? raw) => raw != null && !EstadoCotizacion.values.any((e) => e.name == raw);
+
+  String get compradorNombreVisible => compradorEliminado ? nombreCuentaEliminada : compradorNombre;
+  String get sellerNombreVisible => sellerEliminado ? nombreCuentaEliminada : sellerNombre;
+
   EstadoCotizacion estadoEfectivo([DateTime? ahora]) {
     if (estado == EstadoCotizacion.ofertaEnviada && (oferta?.estaVencida(ahora) ?? false)) {
       return EstadoCotizacion.ofertaVencida;
@@ -425,6 +442,10 @@ class QuoteRequest {
       sellerNombre: readString(m['sellerNombre']) ?? '',
       loteNombre: readString(m['loteNombre']) ?? '',
       loteFoto: readString(m['loteFoto']),
+      compradorEliminado: readBool(m['compradorEliminado']),
+      sellerEliminado: readBool(m['sellerEliminado']),
+      anonimizadoEn: readDate(m['anonimizadoEn']),
+      estadoDesconocido: estadoEsDesconocido(m['estado']),
     );
   }
 }

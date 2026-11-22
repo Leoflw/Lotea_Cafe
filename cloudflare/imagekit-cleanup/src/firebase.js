@@ -7,6 +7,9 @@ const SKEW_SECONDS = 60; // tolerancia de reloj para iat y auth_time
 
 export class AuthError extends Error {}
 
+/** Token válido pero con un inicio de sesión (`auth_time`) demasiado antiguo para la operación. */
+export class ReauthError extends AuthError {}
+
 let jwksCache = { keys: null, expiraMs: 0 };
 
 /** Solo para pruebas. */
@@ -45,10 +48,13 @@ async function cargarClaves(fetchFn, nowMs, forzar) {
  * Valida el ID token y devuelve su payload. Comprueba, en este orden: forma,
  * algoritmo RS256, firma con la clave pública de Google (por `kid`), `exp`,
  * `iat`, `aud` (= id del proyecto), `iss`, `sub` (UID) y `auth_time`.
+ * Con [maxAuthAgeSeconds] exige además que `auth_time` (último inicio de sesión o reautenticación)
+ * sea más reciente que ese límite; si no, lanza [ReauthError]. SIN esa opción no se impone ningún
+ * límite (la ruta de limpieza `POST /` depende de ello: la app la llama con sesiones antiguas).
  * Lanza [AuthError] si algo no cuadra. Otros errores (red al pedir las
  * claves) se propagan como Error normal y el Worker responde 503.
  */
-export async function verifyIdToken(token, { projectId, fetchFn = fetch, nowMs = Date.now() }) {
+export async function verifyIdToken(token, { projectId, fetchFn = fetch, nowMs = Date.now(), maxAuthAgeSeconds = null }) {
   if (typeof token !== 'string' || token.length > 4096) throw new AuthError('Token inválido');
   const partes = token.split('.');
   if (partes.length !== 3 || partes.some((p) => p.length === 0)) throw new AuthError('Token mal formado');
@@ -82,5 +88,6 @@ export async function verifyIdToken(token, { projectId, fetchFn = fetch, nowMs =
   if (payload.iss !== `https://securetoken.google.com/${projectId}`) throw new AuthError('Emisor incorrecto');
   if (typeof payload.sub !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(payload.sub)) throw new AuthError('UID inválido');
   if (typeof payload.auth_time !== 'number' || payload.auth_time > ahora + SKEW_SECONDS) throw new AuthError('auth_time inválido');
+  if (maxAuthAgeSeconds !== null && ahora - payload.auth_time > maxAuthAgeSeconds) throw new ReauthError('Autenticación demasiado antigua');
   return payload;
 }

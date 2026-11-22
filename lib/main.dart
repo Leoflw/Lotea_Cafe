@@ -1,7 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
+import 'repositories/account_deletion_client.dart';
 import 'repositories/auth_repository.dart';
+import 'state/account_deletion_controller.dart';
 import 'repositories/chat_repository.dart';
 import 'repositories/coffee_lot_repository.dart';
 import 'repositories/device_token_repository.dart';
@@ -93,6 +95,8 @@ class _LoteaCafeAppState extends State<LoteaCafeApp> {
         // de los repositorios que lo usan).
         Provider(create: (_) => ImageCleanupClient()),
         Provider(create: (_) => AuthRepository()),
+        Provider(create: (_) => AccountDeletionClient()),
+        ChangeNotifierProvider(create: (c) => AccountDeletionController(auth: c.read<AuthRepository>(), client: c.read<AccountDeletionClient>())),
         Provider(create: (_) => UserRepository()),
         Provider(create: (c) => SellerRepository(alRetirarFotos: c.read<ImageCleanupClient>().procesarCola)),
         Provider(create: (c) => CoffeeLotRepository(alRetirarFotos: c.read<ImageCleanupClient>().procesarCola)),

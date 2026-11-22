@@ -1,4 +1,5 @@
 import '../data/codec.dart';
+import 'cuenta_eliminada.dart';
 
 /// Solicitud comercial de un comprador por un lote ("Me interesa").
 /// Documento `interestRequests/{compradorId}_{coffeeLotId}`: el id
@@ -48,6 +49,17 @@ class InterestRequest {
   final DateTime? leidoComprador; // hasta cuándo leyó el comprador
   final DateTime? leidoVendedor; // hasta cuándo leyó el vendedor
 
+  // Marcadores OPCIONALES (etapa 7.0, solo lectura): quién eliminó su cuenta. Hoy ningún proceso los
+  // escribe; si no existen todo se comporta exactamente como antes. Solo cambian la PRESENTACIÓN:
+  // `estado`, los UID y los ids no se tocan, así que el chat aceptado sigue siendo legible.
+  final bool compradorEliminado;
+  final bool sellerEliminado;
+  final DateTime? anonimizadoEn;
+
+  /// `estado` traía un valor que esta versión no conoce (p. ej. de una versión posterior). El enum
+  /// conserva su valor de respaldo, pero este indicador impide tratarlo como una solicitud abierta.
+  final bool estadoDesconocido;
+
   const InterestRequest({
     required this.id,
     required this.compradorId,
@@ -70,6 +82,10 @@ class InterestRequest {
     this.ultimoMensajeId,
     this.leidoComprador,
     this.leidoVendedor,
+    this.compradorEliminado = false,
+    this.sellerEliminado = false,
+    this.anonimizadoEn,
+    this.estadoDesconocido = false,
   });
 
   static String idPara(String compradorId, String coffeeLotId) => '${compradorId}_$coffeeLotId';
@@ -77,6 +93,29 @@ class InterestRequest {
   /// El chat existe solo para solicitudes aceptadas; su id es el de la solicitud.
   String get chatId => id;
   bool get esConexion => estado == EstadoSolicitud.aceptada;
+
+  /// Solicitud pendiente REAL (un estado desconocido no cuenta como pendiente).
+  bool get esPendienteAbierta => !estadoDesconocido && estado == EstadoSolicitud.pendiente;
+
+  /// `true` si [raw] (el valor de `estado` de un documento) existe pero no es un estado conocido.
+  static bool estadoEsDesconocido(Object? raw) => raw != null && !EstadoSolicitud.values.any((e) => e.name == raw);
+
+  // Presentación con los marcadores de cuenta eliminada.
+  String get compradorNombreVisible => compradorEliminado ? nombreCuentaEliminada : compradorNombre;
+  String get sellerNombreVisible => sellerEliminado ? nombreCuentaEliminada : sellerNombre;
+  String? get compradorCiudadVisible => compradorEliminado ? null : compradorCiudad;
+  String? get compradorTipoVisible => compradorEliminado ? null : compradorTipo;
+
+  /// Nombre de la OTRA parte vista por [uid] («Cuenta eliminada» si esa parte eliminó su cuenta).
+  String nombreContraparte(String uid) => uid == compradorId ? sellerNombreVisible : compradorNombreVisible;
+
+  /// «Cuenta eliminada» si la otra parte de [uid] eliminó su cuenta; si no, null.
+  String? nombreSiContraparteEliminada(String? uid) {
+    if (uid == null) return null;
+    if (uid == compradorId && sellerEliminado) return nombreCuentaEliminada;
+    if (uid == sellerId && compradorEliminado) return nombreCuentaEliminada;
+    return null;
+  }
 
   /// ¿Es [uid] el comprador o el vendedor de esta conexión?
   bool esParticipante(String uid) => uid.isNotEmpty && (uid == compradorId || uid == sellerId);
@@ -142,6 +181,10 @@ class InterestRequest {
       ultimoMensajeId: readString(m['ultimoMensajeId']),
       leidoComprador: _fechaServidor(m, 'leidoComprador'),
       leidoVendedor: _fechaServidor(m, 'leidoVendedor'),
+      compradorEliminado: readBool(m['compradorEliminado']),
+      sellerEliminado: readBool(m['sellerEliminado']),
+      anonimizadoEn: readDate(m['anonimizadoEn']),
+      estadoDesconocido: estadoEsDesconocido(m['estado']),
     );
   }
 

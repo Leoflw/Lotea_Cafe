@@ -6,6 +6,7 @@ import '../repositories/repo_exception.dart';
 import '../services/home_tab_notifier.dart';
 import '../state/session_provider.dart';
 import '../theme/app_theme.dart';
+import '../utils/account_block.dart';
 import '../utils/focus_utils.dart';
 
 /// Confirma y envía una solicitud de contacto ("Me interesa"). Devuelve
@@ -17,6 +18,7 @@ Future<bool> mostrarDialogoInteres({
   required BuildContext context,
   required CoffeeLot lote,
 }) async {
+  if (avisarSiCuentaBloqueada(context)) return false;
   liberarFoco();
   final confirmar = await showDialog<bool>(
     context: context,

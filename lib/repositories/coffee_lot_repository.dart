@@ -1,6 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 import '../models/coffee_lot.dart';
 import '../models/discover_filters.dart';
+import '../models/lot_deletion.dart';
 import '../utils/photo_cleanup.dart';
 import '../utils/photo_limits.dart';
 import 'pending_deletions.dart';
@@ -69,6 +70,23 @@ class CoffeeLotRepository {
     return traducirErrores(s);
   }
 
+  /// Estado de las eliminaciones de cafés de este vendedor, por id de lote
+  /// (`users/{uid}/pendingLotDeletions`, que solo él puede leer). Es lo que distingue un café
+  /// «en eliminación» de un borrador normal: `eliminar` deja el lote como borrador sin fotos
+  /// hasta que el Worker lo borra. Incluye «completado» a propósito: así el café no reaparece
+  /// un instante como borrador entre el cierre de la solicitud y el borrado del documento.
+  Stream<Map<String, EstadoEliminacionLote>> observarEliminaciones(String uid) {
+    final s = _db.collection('users').doc(uid).collection(PendingFileDeletions.coleccionLotes).snapshots().map((snap) {
+      final estados = <String, EstadoEliminacionLote>{};
+      for (final d in snap.docs) {
+        final estado = EstadoEliminacionLote.desde(d.data()['estado']);
+        if (estado != null) estados[d.id] = estado;
+      }
+      return estados;
+    });
+    return traducirErrores(s);
+  }
+
   /// Lotes publicados de un vendedor (vista pública).
   Stream<List<CoffeeLot>> observarPublicadosDeVendedor(String sellerId) {
     final s = _col
@@ -127,6 +145,10 @@ class CoffeeLotRepository {
   /// subida (URL remota). Es la misma regla de la pantalla, repetida aquí para
   /// que ningún camino publique un lote sin imagen.
   Future<String> guardarLote(CoffeeLot lote, {String? idExistente}) => guardar(() async {
+        // Un café suspendido (por una eliminación de cuenta) o de estado desconocido no se guarda desde la app.
+        if (!lote.editable) {
+          throw const RepoException(RepoErrorKind.validacion, 'Este café no se puede modificar en su estado actual.');
+        }
         if (lote.publicado && !lote.tieneFoto) {
           throw const RepoException(RepoErrorKind.validacion, 'Para publicar el café necesitas al menos una foto subida correctamente.');
         }

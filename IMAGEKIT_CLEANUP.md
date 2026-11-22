@@ -51,7 +51,12 @@ Si no se puede comprobar (error de consulta, ImageKit sin URL) **no se borra** y
 
 ## Configuración (NO desplegada)
 Secretos: `IMAGEKIT_PRIVATE_KEY` y `CLEANUP_SERVICE_ACCOUNT_JSON` (cuenta de servicio PROPIA). Permisos de esa
-cuenta: rol personalizado con `datastore.entities.get/list/create/update/delete` (+ lo que exija `runQuery`).
+cuenta: rol personalizado con `datastore.entities.get`, `datastore.entities.list`, `datastore.entities.create`,
+`datastore.entities.update` y `datastore.entities.delete`, **más `datastore.databases.get`**. Esta última la exigen
+`beginTransaction` y `rollback` (documentación de IAM de Firestore) y las rutas de la etapa 6 empiezan con una transacción:
+sin ella Firestore rechaza el inicio con 403 y el Worker responde `503` genérico (internamente `firestore_tx_inicio_403`, que hoy no se registra) aunque el resto funcione. `runQuery` usa `entities.get` y `entities.list`;
+el commit con precondición `exists: false` usa `entities.create` y con `updateTime` usa `entities.update`.
+`entities.delete` solo la necesitan las eliminaciones de lotes y de fotos (etapas 2 y 5); las rutas de cuenta no borran.
 **Limitación:** IAM de Firestore no puede restringir por colección ni por campo; el código limita lo que
 escribe (máscara `loteFoto`, filtro por vendedor, solo la cola y el lote solicitado), pero la cuenta *podría*
 más. Variables: `FIREBASE_PROJECT_ID`, `IMAGEKIT_FOLDER_ROOT` (igual que el Worker de subidas).
@@ -75,3 +80,54 @@ más. Variables: `FIREBASE_PROJECT_ID`, `IMAGEKIT_FOLDER_ROOT` (igual que el Wor
    `loteFoto` de la solicitud y cotización de ese lote queda en `null`, y tras una segunda ejecución la foto
    vieja se borra. Otros lotes y sus solicitudes no cambian.
 4. Interrumpe el internet justo tras eliminar: la solicitud queda `pendiente` y el cron la completa.
+
+## Eliminar un café desde «Mi catálogo» (Ronda 7, Etapa 5)
+
+La interfaz solo **pide** la eliminación con `CoffeeLotRepository.eliminar(lote.id)` (el método de arriba);
+no hay un segundo procedimiento, no borra imágenes y no toca solicitudes, cotizaciones, chats ni `loteFoto`.
+
+- **Acción**: icono «Eliminar café» en cada fila (publicados y borradores), junto a «Editar/Completar».
+- **Confirmación**: nombre del café, nº de solicitudes de interés y de cotizaciones relacionadas, y la
+  explicación de que las negociaciones se conservan pero sus fotografías históricas dejarán de mostrarse.
+  Cancelar no modifica nada. Al confirmar, el botón muestra un indicador y ni se repite ni se puede cerrar el
+  diálogo hasta que `eliminar` responde (el error, si lo hay, se muestra dentro y se puede reintentar).
+- **Contadores exactos**: `InterestRequestRepository.contarDeLote` y `QuoteRepository.contarDeLote` hacen un
+  `count()` por `sellerId` + `coffeeLotId` (solo igualdades: no hace falta un índice compuesto nuevo; no se
+  modificó `firestore.indexes.json`). Se reúnen en `LotDeletionImpactCounter`. Si un conteo falla, el diálogo
+  dice que no pudo calcularse (con «Reintentar») y no deja confirmar: nunca muestra 0 por un error.
+- **Estado pendiente**: `eliminar` deja el lote como borrador sin fotos hasta que el Worker lo borra, así que la
+  app lee `users/{uid}/pendingLotDeletions` (`CoffeeLotRepository.observarEliminaciones`, reglas sin cambios) y
+  distingue: `pendiente` («Eliminación pendiente»), `procesando` («Eliminando…»), `errorTemporal`
+  («Eliminación en reintento», el Worker reintenta solo), `fallido` («No se pudo eliminar» + «Reintentar
+  eliminación», que vuelve a llamar a `eliminar`, que reabre la solicitud) y `completado` (se oculta). Un café
+  en cualquiera de esos estados no se puede abrir ni editar, no cuenta como borrador y solo aparece en «Todos».
+- Las solicitudes `completado` se conservan en la cola (las reglas no permiten borrarlas).
+
+## Eliminación de cuenta — Etapa 6 (solicitar y cancelar; NO borra nada)
+
+Módulo `src/account-deletion.js` (+ `src/firestore-tx.js`) dentro de ESTE Worker; `index.js` solo enruta. No hay un cuarto Worker.
+
+| Ruta | Qué hace |
+|---|---|
+| `POST /account-deletion/request` | Registra el periodo de espera, marca la cuenta `eliminacionPendiente` y suspende los cafés **publicados** del propio UID. |
+| `POST /account-deletion/cancel` | Antes del plazo: reactiva la cuenta y restaura SOLO los cafés que suspendió esa solicitud. |
+| `POST /` | Sin cambios (colas de fotos y lotes). **No** hereda el límite de `auth_time`. |
+
+Requisitos de las rutas de cuenta: `Authorization: Bearer <ID token>`; el UID sale solo de `payload.sub`; `auth_time` de como máximo
+**300 s** (la app reautentica con contraseña y pide `getIdToken(true)`); si no, `401` con `codigo: "reautenticacion"`. Límite propio de
+10 llamadas / 10 min / usuario (aparte del de `POST /`). El cuerpo se ignora. Las fechas las calcula el Worker (`solicitadaAt` y
+`programadaAt = solicitadaAt + RETENCION_DIAS`).
+
+Respuestas: `200 {estado, solicitadaAt, programadaAt, retencionDias, idempotente, cafesSuspendidos}` (solicitar) ·
+`200 {estado: "activa", idempotente, cafesRestaurados}` (cancelar) · `400` · `401` · `403` (sin documento de usuario) ·
+`409` (estado incompatible, `plazo_vencido`, `limite_cafes`) · `429` · `503` (fallo temporal o conflicto no resuelto; no queda estado parcial).
+
+Atomicidad: cada operación es UNA transacción REST de Firestore (`beginTransaction` → lecturas con `transaction` → `commit` con
+precondiciones `updateTime`/`exists`). Con más de 498 cafés publicados se rechaza ANTES de escribir (500 escrituras por commit).
+
+Configuración: no necesita `IMAGEKIT_PRIVATE_KEY` (solo `FIREBASE_PROJECT_ID` y `CLEANUP_SERVICE_ACCOUNT_JSON`); `POST /` sigue exigiendo lo de antes.
+Variables nuevas, **públicas**, en `wrangler.toml`: `RETENCION_DIAS = "15"` y `DRY_RUN = "true"`.
+
+`DRY_RUN` es una barrera preventiva para la etapa 7: **hoy no existe código que pueda ejecutar el borrado definitivo** (ni DELETE de
+documentos, ni llamadas a ImageKit, ni cambios en Authentication), de modo que `DRY_RUN = "false"` tampoco activa nada
+(`dryRunActivo` es siempre `true` mientras `BORRADO_DEFINITIVO_IMPLEMENTADO` sea `false`). No se simulan vencimientos en el Cron.

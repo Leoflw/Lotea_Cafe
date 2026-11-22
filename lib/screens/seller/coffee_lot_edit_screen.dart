@@ -2,6 +2,7 @@ import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 import 'package:provider/provider.dart';
+import '../../utils/account_block.dart';
 import '../../models/coffee_lot.dart';
 import '../../repositories/coffee_lot_repository.dart';
 import '../../repositories/image_repository.dart';
@@ -191,6 +192,7 @@ class _CoffeeLotEditScreenState extends State<CoffeeLotEditScreen> {
   }
 
   Future<void> _guardar({required bool publicar}) async {
+    if (avisarSiCuentaBloqueada(context)) return;
     if (_guardando) return;
     if (!_formKey.currentState!.validate()) {
       // Antes se salía sin avisar; con el formulario en secciones el campo

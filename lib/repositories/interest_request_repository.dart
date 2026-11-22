@@ -33,6 +33,23 @@ class InterestRequestRepository {
     return traducirErrores(s);
   }
 
+  /// Cuántas solicitudes de interés tiene el café [coffeeLotId] de este vendedor: un `count()`
+  /// exacto en el servidor (sin descargar documentos y sin el límite de 100 de las listas
+  /// en tiempo real). Solo igualdades: no necesita un índice compuesto. Si no se puede
+  /// calcular lanza [RepoException]; nunca devuelve 0 por un fallo.
+  Future<int> contarDeLote({required String sellerId, required String coffeeLotId}) => guardar(() async {
+        final agg = await _col
+            .where('sellerId', isEqualTo: sellerId)
+            .where('coffeeLotId', isEqualTo: coffeeLotId)
+            .count()
+            .get();
+        final int? total = agg.count;
+        if (total == null) {
+          throw const RepoException(RepoErrorKind.otro, 'No se pudo calcular el número de solicitudes de este café.');
+        }
+        return total;
+      });
+
   Stream<InterestRequest?> observar(String id) {
     return traducirErrores(_col.doc(id).snapshots().map((d) => d.exists ? _desde(d) : null));
   }
@@ -118,7 +135,7 @@ class InterestRequestRepository {
         await _db.runTransaction((tx) async {
           final actual = await tx.get(ref);
           if (!actual.exists) throw const RepoException(RepoErrorKind.noEncontrado, 'La solicitud ya no existe.');
-          if (readEstado(actual.data()) != EstadoSolicitud.pendiente) {
+          if (InterestRequest.estadoEsDesconocido(actual.data()?['estado']) || readEstado(actual.data()) != EstadoSolicitud.pendiente) {
             throw const RepoException(RepoErrorKind.transicionInvalida, 'Esta solicitud ya fue respondida.');
           }
           tx.update(ref, {

@@ -11,7 +11,7 @@
 import { ErrorTemporal } from './errores.js';
 import { fetchConCuenta } from './google-auth.js';
 
-const raiz = (p) => `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(p)}/databases/(default)/documents`;
+export const raiz = (p) => `https://firestore.googleapis.com/v1/projects/${encodeURIComponent(p)}/databases/(default)/documents`;
 export const ruta = (p, ...seg) => `${raiz(p)}/${seg.map((s) => encodeURIComponent(s)).join('/')}`;
 
 // ---- Valores REST ----
@@ -40,9 +40,9 @@ export function partesDeCola(nombreDoc, coleccion = 'pendingFileDeletions') {
   return { uid: seg[i + 1], id: seg[seg.length - 1] };
 }
 
-const nombreDoc = (proyecto, ...seg) => `projects/${proyecto}/databases/(default)/documents/${seg.join('/')}`;
+export const nombreDoc = (proyecto, ...seg) => `projects/${proyecto}/databases/(default)/documents/${seg.join('/')}`;
 
-async function comoJson(resp, codigo) {
+export async function comoJson(resp, codigo) {
   if (resp.status === 429 || resp.status >= 500) throw new ErrorTemporal(`${codigo}_${resp.status === 429 ? '429' : '5xx'}`);
   if (!resp.ok) throw new ErrorTemporal(`${codigo}_${resp.status}`);
   try {

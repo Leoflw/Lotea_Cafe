@@ -21,7 +21,7 @@ ResolverDestino resolverDestinoPush({
           if (uid != c.compradorId && uid != c.sellerId) return null;
           return ChatScreen(
             interestRequestId: c.id,
-            otroNombre: uid == c.compradorId ? c.sellerNombre : c.compradorNombre,
+            otroNombre: c.nombreContraparte(uid),
           );
         case PushRuta.cotizacion:
           final q = await cotizaciones.observar(destino.id).first;

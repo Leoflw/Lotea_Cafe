@@ -25,3 +25,10 @@ FIREBASE_PROJECT_ID = "lotea-cafe"
 # DEBE ser igual a IMAGEKIT_FOLDER_ROOT del Worker de subidas: los archivos de cada
 # persona viven en {raÃ­z}/users/{uid}/{lots|profile}.
 IMAGEKIT_FOLDER_ROOT = "/lotea-cafe"
+
+# Eliminación de cuenta (etapa 6). Variables PÚBLICAS, no secretas.
+# Días de espera desde que el Worker registra la solicitud (reloj del servidor). Entero 1–365.
+RETENCION_DIAS = "15"
+# Barrera preventiva para la ETAPA 7: la etapa 6 NO contiene código de borrado definitivo, de modo que este
+# valor no activa nada hoy (aunque se cambie a "false"). Dejarlo en "true".
+DRY_RUN = "true"

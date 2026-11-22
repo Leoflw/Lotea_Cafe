@@ -50,6 +50,19 @@ service cloud.firestore {
       return newCount <= maxCount || newCount <= oldCount;
     }
 
+    // ---------- Estado de la cuenta (etapa 6: eliminación de cuenta) ----------
+    // `users/{uid}.cuentaEstado` lo escribe SOLO el Worker de limpieza (cuenta de servicio, que no pasa
+    // por estas reglas). Para el cliente es de solo lectura: ni `users` create ni update lo permiten.
+    //  - El documento del usuario debe existir (exists): sin él no hay cuenta activa.
+    //  - Campo ausente = 'activa' (usuarios anteriores a la etapa 6 siguen igual).
+    //  - Solo el valor EXACTO 'activa' autoriza escrituras comerciales; 'eliminacionPendiente' y cualquier
+    //    valor desconocido las bloquean (fallar cerrado).
+    // Las LECTURAS de historial y conversaciones no la usan: la cuenta pendiente puede consultar todo.
+    function cuentaActiva(userId) {
+      return exists(/databases/$(database)/documents/users/$(userId))
+        && get(/databases/$(database)/documents/users/$(userId)).data.get('cuentaEstado', 'activa') == 'activa';
+    }
+
     // ---------- users/{uid} ----------
     match /users/{userId} {
       allow read: if signedIn() && uid() == userId;
@@ -67,7 +80,9 @@ service cloud.firestore {
         && incoming().createdAt == request.time
         && incoming().updatedAt == request.time;
 
-      // El rol, el correo, el uid y createdAt no pueden cambiar.
+      // El rol, el correo, el uid y createdAt no pueden cambiar. Tampoco `cuentaEstado`,
+      // `eliminacionSolicitadaAt` ni `eliminacionProgramadaAt` (etapa 6): no están en esta lista
+      // blanca (ni en la de `create`), así que solo el Worker puede escribirlos.
       allow update: if signedIn() && uid() == userId
         && touchesOnly(['nombre', 'fotoPath', 'ciudad', 'tipoComprador', 'preferencias',
                         'onboardingCompleto', 'updatedAt'])
@@ -135,6 +150,7 @@ service cloud.firestore {
       match /pendingLotDeletions/{lotId} {
         allow read: if signedIn() && uid() == userId;
         allow create: if signedIn() && uid() == userId
+          && cuentaActiva(userId)
           && lotId.matches('^[A-Za-z0-9]{1,128}$')
           && incoming().keys().hasOnly(['lotId', 'estado', 'createdAt'])
           && incoming().keys().hasAll(['lotId', 'estado', 'createdAt'])
@@ -143,6 +159,7 @@ service cloud.firestore {
           && incoming().createdAt == request.time
           && get(/databases/$(database)/documents/coffeeLots/$(lotId)).data.sellerId == uid();
         allow update: if signedIn() && uid() == userId
+          && cuentaActiva(userId)
           && resource.data.estado == 'fallido'
           && touchesOnly(['estado', 'createdAt'])
           && incoming().estado == 'pendiente'
@@ -170,6 +187,7 @@ service cloud.firestore {
 
       allow create: if signedIn() && uid() == sellerId
         && roleOf(uid()) == 'vendedor'
+        && cuentaActiva(uid())
         && incoming().keys().hasOnly(['usuarioId', 'nombreMarca', 'fincaPrincipal', 'fotoPrincipal',
                                       'fotoPrincipalStoragePath', 'galeria', 'galeriaStoragePaths',
                                       'descripcion', 'historia', 'aniosProduciendo', 'tipoProduccion',
@@ -191,6 +209,7 @@ service cloud.firestore {
 
       // verificado, calificacionPromedio, numOperaciones y createdAt no se tocan desde la app.
       allow update: if signedIn() && uid() == sellerId
+        && cuentaActiva(uid())
         && touchesOnly(['nombreMarca', 'fincaPrincipal', 'fotoPrincipal', 'fotoPrincipalStoragePath',
                         'galeria', 'galeriaStoragePaths', 'descripcion', 'historia',
                         'aniosProduciendo', 'tipoProduccion', 'region', 'departamento',
@@ -216,6 +235,7 @@ service cloud.firestore {
 
       allow create: if signedIn() && uid() == incoming().sellerId
         && roleOf(uid()) == 'vendedor'
+        && cuentaActiva(uid())
         && exists(/databases/$(database)/documents/sellerProfiles/$(uid()))
         && incoming().keys().hasOnly(['sellerId', 'nombre', 'variedades', 'proceso', 'tipoCafe',
                                       'altitudMsnm', 'puntajeTaza', 'cosecha', 'perfilSensorial',
@@ -240,7 +260,12 @@ service cloud.firestore {
         && incoming().createdAt == request.time
         && incoming().updatedAt == request.time;
 
+      // Un café 'suspendido' (por una solicitud de eliminación de cuenta) o con un estado desconocido
+      // no se edita ni se publica desde la app: `estado`, `estadoPrevio` y `suspensionSolicitudId` los
+      // escribe solo el Worker. `estadoPrevio` y `suspensionSolicitudId` tampoco están en touchesOnly.
       allow update: if signedIn() && resource.data.sellerId == uid()
+        && resource.data.estado in ['borrador', 'publicado']
+        && cuentaActiva(uid())
         && touchesOnly(['nombre', 'variedades', 'proceso', 'tipoCafe', 'altitudMsnm', 'puntajeTaza',
                         'cosecha', 'perfilSensorial', 'descripcion', 'precioCOP', 'unidad',
                         'cantidadDisponibleKg', 'pedidoMinimoKg', 'disponible', 'metodosEnvio',
@@ -266,6 +291,7 @@ service cloud.firestore {
       // solicitud hace que el Worker deje en null `loteFoto` de las negociaciones de ese lote.
       // (La app normal no borra: pide la eliminación y la completa el Worker.)
       allow delete: if signedIn() && resource.data.sellerId == uid()
+        && cuentaActiva(uid())
         && resource.data.get('fotos', []).size() == 0
         && resource.data.get('fotosStoragePaths', []).size() == 0
         && exists(/databases/$(database)/documents/users/$(uid())/pendingLotDeletions/$(lotId));
@@ -282,6 +308,8 @@ service cloud.firestore {
       // determinista impide dos solicitudes activas para el mismo par.
       allow create: if signedIn() && uid() == incoming().compradorId
         && roleOf(uid()) == 'comprador'
+        && cuentaActiva(uid())
+        && cuentaActiva(incoming().sellerId)
         && requestId == incoming().compradorId + '_' + incoming().coffeeLotId
         && incoming().keys().hasOnly(['compradorId', 'sellerId', 'coffeeLotId', 'mensaje', 'estado',
                                       'compradorNombre', 'compradorCiudad', 'compradorTipo',
@@ -310,6 +338,11 @@ service cloud.firestore {
       function isSellerOfRequest() {
         return resource.data.sellerId == uid();
       }
+      // Avanzar una negociación exige que AMBAS cuentas estén activas (etapa 6). Marcar un chat como
+      // leído no es avanzar la negociación y no la usa.
+      function ambasActivas() {
+        return cuentaActiva(resource.data.compradorId) && cuentaActiva(resource.data.sellerId);
+      }
       function newMessagePath() {
         return /databases/$(database)/documents/chats/$(requestId)/messages/$(incoming().ultimoMensajeId);
       }
@@ -333,6 +366,7 @@ service cloud.firestore {
               && incoming().leidoVendedor == request.time)
             ||
             ((isBuyerOfRequest() || isSellerOfRequest())
+              && ambasActivas()
               && touchesOnly(['ultimoMensajeAt', 'ultimoMensajeDe', 'ultimoMensajeId'])
               && lastMessageBackedByNewMessage())
           );
@@ -343,6 +377,7 @@ service cloud.firestore {
           chatStateUpdate()
           ||
           (incoming().updatedAt == request.time
+            && ambasActivas()
             && (
               // El vendedor destinatario acepta o rechaza una solicitud pendiente.
               (resource.data.sellerId == uid()
@@ -376,6 +411,8 @@ service cloud.firestore {
       allow read: if signedIn() && isParticipant() && conn().estado == 'aceptada';
 
       allow create: if signedIn() && isParticipant() && conn().estado == 'aceptada'
+        && cuentaActiva(conn().compradorId)
+        && cuentaActiva(conn().sellerId)
         && incoming().keys().hasOnly(['senderId', 'texto', 'createdAt'])
         && incoming().senderId == uid()
         && isStr(incoming().texto, 1, 2000)
@@ -429,6 +466,8 @@ service cloud.firestore {
       // El comprador crea la solicitud dentro de una conexión aceptada que le pertenece.
       allow create: if signedIn() && uid() == incoming().compradorId
         && roleOf(uid()) == 'comprador'
+        && cuentaActiva(uid())
+        && cuentaActiva(incoming().sellerId)
         && incoming().keys().hasOnly(['interestRequestId', 'compradorId', 'sellerId', 'coffeeLotId',
                                       'cantidad', 'unidad', 'comentario', 'lugarEntrega', 'estado',
                                       'oferta', 'revisionComentario', 'compradorNombre',
@@ -450,6 +489,8 @@ service cloud.firestore {
 
       // Transiciones (misma tabla que QuoteStateMachine). Siempre cambia updatedAt.
       allow update: if signedIn() && inQuote() && incoming().updatedAt == request.time
+        && cuentaActiva(resource.data.compradorId)
+        && cuentaActiva(resource.data.sellerId)
         && (
           // Vendedor → envía oferta (o la reenvía tras una revisión)
           (isSeller() && waitingSeller() && next() == 'ofertaEnviada'
@@ -496,15 +537,28 @@ service cloud.firestore {
 
         allow create: if signedIn()
           && (parentAfter().compradorId == uid() || parentAfter().sellerId == uid())
+          && cuentaActiva(parentAfter().compradorId)
+          && cuentaActiva(parentAfter().sellerId)
           && incoming().keys().hasOnly(['tipo', 'actor', 'actorId', 'fecha', 'nota', 'totalCOP', 'versionOferta'])
           && incoming().actorId == uid()
           && incoming().actor == (parentAfter().compradorId == uid() ? 'comprador' : 'vendedor')
           && incoming().tipo in ['solicitudCreada', 'ofertaEnviada', 'revisionSolicitada', 'ofertaAceptada',
                                  'ofertaRechazada', 'solicitudRechazada', 'cancelada']
-          && isStrOrNull(incoming().nota, 500)
+          && isStrOrNull(incoming().get('nota', null), 500)
           && incoming().fecha == request.time;
 
         allow update, delete: if false;
+      }
+    }
+
+    // ---------- accountDeletionJobs/{uid} ----------
+    // Trabajos de eliminación de cuenta (etapa 6). INTERNOS del Worker de limpieza: los clientes no
+    // pueden leerlos ni escribirlos, ni ellos ni sus subcolecciones. El Worker usa su cuenta de
+    // servicio, que no pasa por estas reglas.
+    match /accountDeletionJobs/{userId} {
+      allow read, write: if false;
+      match /{document=**} {
+        allow read, write: if false;
       }
     }
 

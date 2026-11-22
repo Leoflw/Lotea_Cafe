@@ -37,7 +37,11 @@ class StreamView<T> extends StatefulWidget {
   final Stream<T> Function() crear;
   final Widget Function(BuildContext context, T data) builder;
 
-  const StreamView({super.key, required this.crear, required this.builder});
+  /// Pantalla propia para un fallo (p. ej. «café no disponible» en lugar de un error técnico).
+  /// Sin él se muestra el error genérico con «Reintentar», como siempre.
+  final Widget Function(BuildContext context, RepoException error, VoidCallback reintentar)? errorBuilder;
+
+  const StreamView({super.key, required this.crear, required this.builder, this.errorBuilder});
 
   @override
   State<StreamView<T>> createState() => _StreamViewState<T>();
@@ -54,10 +58,17 @@ class _StreamViewState<T> extends State<StreamView<T>> {
       stream: _stream,
       builder: (context, snap) {
         if (snap.hasError) {
-          return RepoErrorView(error: RepoException.desde(snap.error!), onReintentar: _reintentar);
+          final e = RepoException.desde(snap.error!);
+          final propio = widget.errorBuilder;
+          if (propio != null) return propio(context, e, _reintentar);
+          return RepoErrorView(error: e, onReintentar: _reintentar);
         }
-        if (!snap.hasData && snap.connectionState == ConnectionState.waiting) return const _Cargando();
-        if (!snap.hasData) return const _Cargando();
+        // Antes de que llegue el primer evento sí se está cargando.
+        if (snap.connectionState == ConnectionState.waiting) return const _Cargando();
+        // Si T admite null (p. ej. `CoffeeLot?`), un evento `null` es un DATO («el documento no existe»), no
+        // «cargando»: `snap.hasData` es falso en ese caso y dejaba el indicador girando para siempre. Si T no
+        // admite null y no hay dato (stream cerrado sin emitir), se mantiene el indicador como antes.
+        if (!snap.hasData && null is! T) return const _Cargando();
         return widget.builder(context, snap.data as T);
       },
     );

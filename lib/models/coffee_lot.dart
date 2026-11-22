@@ -1,6 +1,22 @@
 import '../data/codec.dart';
 
-enum EstadoLote { borrador, publicado }
+/// Estado de un café.
+///  - borrador / publicado: los únicos que la app escribe.
+///  - suspendido: lo pone SOLO el Worker (solicitud de eliminación de cuenta); es informativo: no se
+///    edita, no se publica y no entra al catálogo.
+///  - desconocido: cualquier otro valor guardado (p. ej. uno de una versión futura). NUNCA se escribe y
+///    NUNCA se trata como borrador: no es editable ni publicable.
+enum EstadoLote { borrador, publicado, suspendido, desconocido }
+
+EstadoLote leerEstadoLote(Object? v) {
+  if (v == null) return EstadoLote.borrador; // documento antiguo sin el campo
+  if (v is String) {
+    for (final e in const [EstadoLote.borrador, EstadoLote.publicado, EstadoLote.suspendido]) {
+      if (e.name == v) return e;
+    }
+  }
+  return EstadoLote.desconocido;
+}
 
 /// Perfil sensorial simplificado (sección 5 — "Perfil de taza").
 /// Se usan niveles descriptivos en vez de valores numéricos complejos.
@@ -110,6 +126,10 @@ class CoffeeLot {
   });
 
   bool get publicado => estado == EstadoLote.publicado;
+  bool get suspendido => estado == EstadoLote.suspendido;
+
+  /// Solo un borrador o un café publicado se puede abrir en el formulario de edición.
+  bool get editable => estado == EstadoLote.borrador || estado == EstadoLote.publicado;
 
   /// Hay al menos una foto realmente subida (URL remota). Una ruta local de
   /// una subida fallida no cuenta.
@@ -249,7 +269,7 @@ class CoffeeLot {
       region: readString(m['region']) ?? '',
       municipio: readString(m['municipio']) ?? '',
       vendedorVerificado: m['vendedorVerificado'] == true,
-      estado: readEnum(EstadoLote.values, m['estado'], EstadoLote.borrador),
+      estado: leerEstadoLote(m['estado']),
       fechaPublicacion: readDate(m['fechaPublicacion']),
       updatedAt: readDate(m['updatedAt']),
     );

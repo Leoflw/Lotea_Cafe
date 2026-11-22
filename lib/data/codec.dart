@@ -23,3 +23,7 @@ T readEnum<T extends Enum>(List<T> values, Object? v, T fallback) {
   }
   return fallback;
 }
+
+/// Marcador opcional de un documento: solo un booleano `true` explícito cuenta como verdadero
+/// (ausente, null, texto u otro tipo = false).
+bool readBool(Object? v) => v == true;

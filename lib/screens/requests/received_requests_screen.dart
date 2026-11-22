@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import '../../utils/account_block.dart';
 import '../../models/interest_request.dart';
 import '../../repositories/interest_request_repository.dart';
 import '../../state/activity_provider.dart';
@@ -129,6 +130,7 @@ class _ListaRecibidasState extends State<_ListaRecibidas> {
 
   Future<void> _responder(InterestRequest s, bool aceptar) async {
     if (_procesando.contains(s.id)) return;
+    if (avisarSiCuentaBloqueada(context)) return;
     setState(() => _procesando.add(s.id));
     try {
       await context.read<InterestRequestRepository>().responder(s.id, aceptar: aceptar);
@@ -176,8 +178,8 @@ class _SolicitudRecibida extends StatelessWidget {
   Widget build(BuildContext context) {
     final s = solicitud;
     final textTheme = Theme.of(context).textTheme;
-    final nombre = s.compradorNombre.isEmpty ? 'Comprador' : s.compradorNombre;
-    final perfil = [if (s.compradorTipo != null) s.compradorTipo!, if (s.compradorCiudad != null) s.compradorCiudad!].join(' · ');
+    final nombre = s.compradorNombreVisible.isEmpty ? 'Comprador' : s.compradorNombreVisible;
+    final perfil = [if (s.compradorTipoVisible != null) s.compradorTipoVisible!, if (s.compradorCiudadVisible != null) s.compradorCiudadVisible!].join(' · ');
     final mensaje = s.mensaje ?? '';
 
     return Card(
@@ -304,10 +306,10 @@ class _ListaConexiones extends StatelessWidget {
         final noLeido = actividad.tieneNoLeidos(c);
         final cotizaciones = actividad.cotizacionesDeConexion(c.id);
         final porResponder = cotizaciones.any((q) => cotizacionRequiereAccion(q, verComoVendedor: true));
-        final perfil = [if (c.compradorTipo != null) c.compradorTipo!, if (c.compradorCiudad != null) c.compradorCiudad!].join(' · ');
+        final perfil = [if (c.compradorTipoVisible != null) c.compradorTipoVisible!, if (c.compradorCiudadVisible != null) c.compradorCiudadVisible!].join(' · ');
         return ConnectionTile(
           foto: c.loteFoto,
-          titulo: c.compradorNombre.isEmpty ? 'Comprador' : c.compradorNombre,
+          titulo: c.compradorNombreVisible.isEmpty ? 'Comprador' : c.compradorNombreVisible,
           subtitulo: c.loteNombre,
           meta: perfil.isEmpty ? null : perfil,
           noLeido: noLeido,
@@ -316,7 +318,7 @@ class _ListaConexiones extends StatelessWidget {
             if (porResponder) const StatusPill(label: 'Cotización por responder', tone: StatusTone.warning, icon: Icons.notifications_active_outlined),
           ],
           onAbrirChat: () => Navigator.of(context).push(MaterialPageRoute(
-            builder: (_) => ChatScreen(interestRequestId: c.id, otroNombre: c.compradorNombre),
+            builder: (_) => ChatScreen(interestRequestId: c.id, otroNombre: c.compradorNombreVisible),
           )),
         );
       },

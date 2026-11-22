@@ -1,7 +1,15 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 import '../../models/coffee_lot.dart';
+import '../../models/lot_deletion.dart';
 import '../../models/seller_profile.dart';
+import '../../repositories/coffee_lot_repository.dart';
+import '../../utils/account_block.dart';
+import '../../repositories/interest_request_repository.dart';
+import '../../repositories/lot_deletion_impact.dart';
+import '../../repositories/quote_repository.dart';
+import '../../repositories/repo_exception.dart';
 import '../../state/activity_provider.dart';
 import '../../theme/app_theme.dart';
 import '../../utils/avatar_logic.dart';
@@ -9,6 +17,7 @@ import '../../utils/format_utils.dart';
 import '../../widgets/app_image.dart';
 import '../../widgets/avatar_circular.dart';
 import '../../widgets/badges.dart';
+import '../../widgets/delete_lot_dialog.dart';
 import '../../widgets/empty_state.dart';
 import '../../widgets/price_text.dart';
 import '../../widgets/status_pill.dart';
@@ -33,21 +42,33 @@ class MyCoffeeLotsScreen extends StatefulWidget {
 class _MyCoffeeLotsScreenState extends State<MyCoffeeLotsScreen> {
   _FiltroCatalogo _filtro = _FiltroCatalogo.todos;
 
-  bool _cumple(CoffeeLot l, _FiltroCatalogo f) {
+  /// Hay una eliminación en marcha (diálogo abierto o reintento enviándose): mientras tanto no se
+  /// puede iniciar otra. Es la segunda barrera; la primera es el propio diálogo.
+  bool _ocupado = false;
+  String? _reintentandoId;
+
+  /// Un café en proceso de eliminación (o cuya eliminación falló) solo aparece en «Todos»: no es
+  /// un borrador editable ni un café publicado.
+  bool _cumple(CoffeeLot l, _FiltroCatalogo f, Map<String, EstadoEliminacionLote> eliminaciones) {
+    if (eliminaciones.containsKey(l.id)) return f == _FiltroCatalogo.todos;
+    // Suspendido (por una eliminación de cuenta) o de estado desconocido: solo informativo, solo en «Todos».
+    if (!l.editable) return f == _FiltroCatalogo.todos;
     switch (f) {
       case _FiltroCatalogo.todos:
         return true;
       case _FiltroCatalogo.publicados:
         return l.publicado;
       case _FiltroCatalogo.borradores:
-        return !l.publicado;
+        return l.estado == EstadoLote.borrador;
       case _FiltroCatalogo.agotados:
         return l.publicado && !l.disponible;
     }
   }
 
-  void _nuevoCafe(SellerProfile perfil) =>
-      Navigator.of(context).push(MaterialPageRoute(builder: (_) => CoffeeLotEditScreen(sellerId: perfil.id)));
+  void _nuevoCafe(SellerProfile perfil) {
+    if (avisarSiCuentaBloqueada(context)) return;
+    Navigator.of(context).push(MaterialPageRoute(builder: (_) => CoffeeLotEditScreen(sellerId: perfil.id)));
+  }
 
   void _editarPerfil() =>
       Navigator.of(context).push(MaterialPageRoute(builder: (_) => const SellerProfileEditScreen()));
@@ -55,11 +76,11 @@ class _MyCoffeeLotsScreenState extends State<MyCoffeeLotsScreen> {
   @override
   Widget build(BuildContext context) {
     final a = context.watch<ActivityProvider>();
-    if (a.perfilVendedor.cargando || a.lotesPropios.cargando) {
+    if (a.perfilVendedor.cargando || a.lotesPropios.cargando || a.eliminaciones.cargando) {
       return Scaffold(appBar: AppBar(title: const Text('Mi catálogo')), body: const Center(child: CircularProgressIndicator()));
     }
-    if (a.perfilVendedor.fallo || a.lotesPropios.fallo) {
-      final e = (a.perfilVendedor.error ?? a.lotesPropios.error)!;
+    if (a.perfilVendedor.fallo || a.lotesPropios.fallo || a.eliminaciones.fallo) {
+      final e = (a.perfilVendedor.error ?? a.lotesPropios.error ?? a.eliminaciones.error)!;
       return Scaffold(appBar: AppBar(title: const Text('Mi catálogo')), body: RepoErrorView(error: e, onReintentar: a.reintentar));
     }
     final perfil = a.perfilVendedor.data;
@@ -89,9 +110,13 @@ class _MyCoffeeLotsScreenState extends State<MyCoffeeLotsScreen> {
     );
   }
 
-  Widget _contenido(BuildContext context, ActivityProvider a, SellerProfile perfil, List<CoffeeLot> lotes, TextTheme textTheme) {
-    final filtrados = lotes.where((l) => _cumple(l, _filtro)).toList();
-    int cuenta(_FiltroCatalogo f) => lotes.where((l) => _cumple(l, f)).length;
+  Widget _contenido(BuildContext context, ActivityProvider a, SellerProfile perfil, List<CoffeeLot> todos, TextTheme textTheme) {
+    // Los cafés cuya eliminación ya terminó (el Worker cerró la solicitud) se ocultan: el documento
+    // está a punto de desaparecer y no debe verse ni un instante como borrador.
+    final eliminaciones = a.eliminacionesPropias;
+    final lotes = todos.where((l) => eliminaciones[l.id]?.terminado != true).toList();
+    final filtrados = lotes.where((l) => _cumple(l, _filtro, eliminaciones)).toList();
+    int cuenta(_FiltroCatalogo f) => lotes.where((l) => _cumple(l, f, eliminaciones)).length;
 
     return ListView(
       padding: const EdgeInsets.only(bottom: 32),
@@ -152,15 +177,87 @@ class _MyCoffeeLotsScreenState extends State<MyCoffeeLotsScreen> {
           )
         else
           for (final lote in filtrados) ...[
-            _FilaCafe(
+            FilaCafe(
               lote: lote,
-              onTap: () => Navigator.of(context)
-                  .push(MaterialPageRoute(builder: (_) => CoffeeLotEditScreen(sellerId: perfil.id, loteExistente: lote))),
+              eliminacion: eliminaciones[lote.id],
+              bloqueado: _ocupado,
+              reintentando: _reintentandoId == lote.id,
+              onTap: () {
+                if (avisarSiCuentaBloqueada(context)) return;
+                Navigator.of(context).push(MaterialPageRoute(builder: (_) => CoffeeLotEditScreen(sellerId: perfil.id, loteExistente: lote)));
+              },
+              onEliminar: () => _eliminar(lote),
+              onReintentarEliminacion: () => _reintentarEliminacion(lote),
             ),
             const Divider(indent: 20, endIndent: 20),
           ],
       ],
     );
+  }
+
+  /// Confirma y pide eliminar un café. La eliminación la hace SOLO `CoffeeLotRepository.eliminar`
+  /// (retira el lote del catálogo y encola el borrado); el Worker la completa después.
+  Future<void> _eliminar(CoffeeLot lote) async {
+    if (_ocupado || avisarSiCuentaBloqueada(context)) return;
+    setState(() => _ocupado = true);
+    final lotes = context.read<CoffeeLotRepository>();
+    final contador = LotDeletionImpactCounter(
+      solicitudes: context.read<InterestRequestRepository>(),
+      cotizaciones: context.read<QuoteRepository>(),
+    );
+    final messenger = ScaffoldMessenger.of(context);
+    ResultadoEliminacion? resultado;
+    try {
+      resultado = await mostrarConfirmacionEliminarCafe(
+        context,
+        nombreCafe: lote.nombre,
+        contar: () => contador.contar(sellerId: lote.sellerId, coffeeLotId: lote.id),
+        eliminar: () => lotes.eliminar(lote.id),
+      );
+    } finally {
+      if (mounted) setState(() => _ocupado = false);
+    }
+    if (resultado == null) return; // canceló: no se modificó nada
+    messenger
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(
+        content: Text(resultado == ResultadoEliminacion.enviada
+            ? '«${lote.nombre}» ya no aparece en tu catálogo. Terminaremos de eliminarlo en unos minutos.'
+            : 'La solicitud tarda más de lo normal. Si quedó guardada, verás «${lote.nombre}» como «Eliminación pendiente».'),
+        duration: const Duration(seconds: 5),
+      ));
+  }
+
+  /// Reintenta una eliminación que el Worker dejó «fallida»: reutiliza el mismo método del
+  /// repositorio (que reabre la solicitud) sin repetir la confirmación.
+  Future<void> _reintentarEliminacion(CoffeeLot lote) async {
+    if (_ocupado || avisarSiCuentaBloqueada(context)) return;
+    setState(() {
+      _ocupado = true;
+      _reintentandoId = lote.id;
+    });
+    final repo = context.read<CoffeeLotRepository>();
+    final messenger = ScaffoldMessenger.of(context);
+    String mensaje = 'Reintentando eliminar «${lote.nombre}».';
+    var error = false;
+    try {
+      await repo.eliminar(lote.id).timeout(const Duration(seconds: 30));
+    } on TimeoutException {
+      mensaje = 'La solicitud tarda más de lo normal. Si quedó guardada, se enviará al volver la conexión.';
+    } catch (e) {
+      mensaje = RepoException.desde(e).mensaje;
+      error = true;
+    } finally {
+      if (mounted) {
+        setState(() {
+          _ocupado = false;
+          _reintentandoId = null;
+        });
+      }
+    }
+    messenger
+      ..hideCurrentSnackBar()
+      ..showSnackBar(SnackBar(content: Text(mensaje), backgroundColor: error ? AppColors.danger : null));
   }
 
   String _nombreFiltro(_FiltroCatalogo f) {
@@ -305,15 +402,40 @@ class _ChipFiltro extends StatelessWidget {
 }
 
 /// Un café del catálogo como fila plana (sin tarjeta): foto, estado, nombre,
-/// precio y la acción de editar. Reúne lo que el vendedor necesita ver de un
+/// precio y las acciones de editar y eliminar. Reúne lo que el vendedor necesita ver de un
 /// vistazo sin repetir datos.
-class _FilaCafe extends StatelessWidget {
+///
+/// Si [eliminacion] no es null el café está en proceso de eliminación (o su eliminación falló):
+/// se muestra como tal, sin precio ni acciones de edición, y no se abre el formulario.
+class FilaCafe extends StatelessWidget {
   final CoffeeLot lote;
+  final EstadoEliminacionLote? eliminacion;
+
+  /// Hay otra eliminación en marcha: se desactivan las acciones de eliminar.
+  final bool bloqueado;
+
+  /// Esta fila está reenviando su eliminación fallida.
+  final bool reintentando;
   final VoidCallback onTap;
-  const _FilaCafe({required this.lote, required this.onTap});
+  final VoidCallback onEliminar;
+  final VoidCallback onReintentarEliminacion;
+
+  const FilaCafe({
+    super.key,
+    required this.lote,
+    required this.onTap,
+    required this.onEliminar,
+    required this.onReintentarEliminacion,
+    this.eliminacion,
+    this.bloqueado = false,
+    this.reintentando = false,
+  });
 
   @override
   Widget build(BuildContext context) {
+    final e = eliminacion;
+    if (e != null) return _filaEnEliminacion(context, e);
+    if (!lote.editable) return _filaInformativa(context);
     final textTheme = Theme.of(context).textTheme;
     final agotado = lote.publicado && !lote.disponible;
     final sinFoto = lote.fotoPrincipal == null;
@@ -383,10 +505,152 @@ class _FilaCafe extends StatelessWidget {
                   label: Text(lote.publicado ? 'Editar' : 'Completar'),
                   style: TextButton.styleFrom(minimumSize: const Size(48, 40), padding: const EdgeInsets.symmetric(horizontal: 8)),
                 ),
+                IconButton(
+                  onPressed: bloqueado ? null : onEliminar,
+                  icon: const Icon(Icons.delete_outline),
+                  color: AppColors.danger,
+                  tooltip: 'Eliminar café',
+                  constraints: const BoxConstraints(minWidth: 48, minHeight: 48),
+                ),
               ],
             ),
           ],
         ),
+      ),
+    );
+  }
+
+  /// Café suspendido (solicitud de eliminación de cuenta) o con un estado que la app no reconoce: solo
+  /// se muestra. No se abre, no se edita, no se publica y no se elimina desde aquí.
+  Widget _filaInformativa(BuildContext context) {
+    final textTheme = Theme.of(context).textTheme;
+    final suspendido = lote.suspendido;
+    return Padding(
+      key: ValueKey('cafe_informativo_${lote.id}'),
+      padding: const EdgeInsets.fromLTRB(20, 14, 20, 14),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Opacity(
+            opacity: 0.45,
+            child: AppImage(
+              path: lote.fotoPrincipal,
+              galeria: lote.fotosRemotas,
+              width: 64,
+              height: 64,
+              borderRadius: BorderRadius.circular(AppRadius.card - 2),
+              ampliable: false,
+            ),
+          ),
+          const SizedBox(width: 14),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                StatusPill(
+                  label: suspendido ? 'Suspendido' : 'Estado no reconocido',
+                  tone: StatusTone.neutral,
+                  icon: suspendido ? Icons.pause_circle_outline : Icons.help_outline,
+                ),
+                const SizedBox(height: 6),
+                Text(lote.nombre, maxLines: 2, overflow: TextOverflow.ellipsis, style: textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800)),
+                const SizedBox(height: 4),
+                Text(
+                  suspendido
+                      ? 'Suspendido por tu solicitud de eliminación de cuenta. No aparece en el catálogo ni se puede editar; se restablece si cancelas la solicitud en «Mi cuenta».'
+                      : 'No reconocemos el estado de este café, así que por seguridad no se puede editar. Actualiza la aplicación.',
+                  style: textTheme.bodySmall,
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  /// Café cuya eliminación se pidió: ya no está en el catálogo público y no se puede editar
+  /// mientras el Worker termina de borrarlo. Si el Worker agotó los reintentos, se ofrece
+  /// reenviar la eliminación.
+  Widget _filaEnEliminacion(BuildContext context, EstadoEliminacionLote e) {
+    final textTheme = Theme.of(context).textTheme;
+    final fallida = e.fallo;
+    final String etiqueta;
+    final IconData icono;
+    final String mensaje;
+    switch (e) {
+      case EstadoEliminacionLote.pendiente:
+        etiqueta = 'Eliminación pendiente';
+        icono = Icons.hourglass_top_outlined;
+        mensaje = 'Ya no aparece en tu catálogo. Estamos terminando de eliminarlo; puede tardar unos minutos.';
+      case EstadoEliminacionLote.procesando:
+        etiqueta = 'Eliminando…';
+        icono = Icons.autorenew;
+        mensaje = 'Estamos borrando el café y sus fotografías. No necesitas hacer nada.';
+      case EstadoEliminacionLote.errorTemporal:
+        etiqueta = 'Eliminación en reintento';
+        icono = Icons.schedule;
+        mensaje = 'Hubo un problema temporal. La eliminación se reintentará automáticamente.';
+      case EstadoEliminacionLote.fallido:
+        etiqueta = 'No se pudo eliminar';
+        icono = Icons.error_outline;
+        mensaje = 'No pudimos completar la eliminación. Puedes reintentarla; tus negociaciones no se han tocado.';
+      case EstadoEliminacionLote.completado:
+        // La pantalla lo oculta; por si se pintara, no ofrece ninguna acción.
+        etiqueta = 'Eliminado';
+        icono = Icons.check_circle_outline;
+        mensaje = 'Este café ya se eliminó.';
+    }
+    return Padding(
+      key: ValueKey('cafe_en_eliminacion_${lote.id}'),
+      padding: const EdgeInsets.fromLTRB(20, 14, 20, 6),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Opacity(
+                opacity: 0.45,
+                child: AppImage(
+                  path: lote.fotoPrincipal,
+                  galeria: lote.fotosRemotas,
+                  width: 64,
+                  height: 64,
+                  borderRadius: BorderRadius.circular(AppRadius.card - 2),
+                  ampliable: false,
+                ),
+              ),
+              const SizedBox(width: 14),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    StatusPill(label: etiqueta, tone: fallida ? StatusTone.danger : StatusTone.warning, icon: icono),
+                    const SizedBox(height: 6),
+                    Text(lote.nombre, maxLines: 2, overflow: TextOverflow.ellipsis, style: textTheme.titleMedium?.copyWith(fontWeight: FontWeight.w800)),
+                    const SizedBox(height: 4),
+                    Text(mensaje, style: textTheme.bodySmall),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          if (fallida)
+            Align(
+              alignment: Alignment.centerRight,
+              child: TextButton.icon(
+                onPressed: (bloqueado || reintentando) ? null : onReintentarEliminacion,
+                icon: reintentando
+                    ? const SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2))
+                    : const Icon(Icons.refresh, size: 18),
+                label: const Text('Reintentar eliminación'),
+                style: TextButton.styleFrom(minimumSize: const Size(48, 44)),
+              ),
+            )
+          else
+            const SizedBox(height: 8),
+        ],
       ),
     );
   }

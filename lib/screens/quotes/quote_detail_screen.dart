@@ -1,13 +1,16 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import '../../utils/account_block.dart';
 import '../../models/quote_request.dart';
 import '../../repositories/quote_repository.dart';
 import '../../repositories/repo_exception.dart';
 import '../../state/session_provider.dart';
 import '../../theme/app_theme.dart';
 import '../../utils/format_utils.dart';
+import '../../utils/negociacion_restringida.dart';
 import '../../widgets/app_image.dart';
 import '../../widgets/empty_state.dart';
+import '../../widgets/modo_consulta_banner.dart';
 import '../../widgets/remote_view.dart';
 import '../../widgets/status_pill.dart';
 import '../../widgets/text_prompt_dialog.dart';
@@ -50,9 +53,14 @@ class _Contenido extends StatefulWidget {
 
 class _ContenidoState extends State<_Contenido> {
   bool _ocupado = false;
+  // Se activa cuando el servidor rechaza una acción por permisos: la cotización pasa a modo de
+  // consulta (historial y detalle visibles, sin acciones). «Volver a intentar» lo desactiva.
+  bool _soloConsulta = false;
 
-  Future<void> _ejecutar(Future<void> Function() accion, String exito) async {
+  /// [intento] (infinitivo) se usa en el aviso si Firestore rechaza la acción por permisos.
+  Future<void> _ejecutar(Future<void> Function() accion, String exito, {String intento = 'completar la acción'}) async {
     if (_ocupado) return;
+    if (avisarSiCuentaBloqueada(context)) return;
     setState(() => _ocupado = true);
     try {
       await accion();
@@ -62,7 +70,16 @@ class _ContenidoState extends State<_Contenido> {
           ..showSnackBar(SnackBar(content: Text(exito), backgroundColor: AppColors.leafGreen));
       }
     } on RepoException catch (e) {
-      if (mounted) mostrarError(context, e);
+      if (!mounted) return;
+      if (esRechazoPorPermisos(e)) {
+        // Sin falso éxito (el éxito solo se muestra tras confirmar el servidor) y sin tocar el historial.
+        setState(() => _soloConsulta = true);
+        ScaffoldMessenger.of(context)
+          ..hideCurrentSnackBar()
+          ..showSnackBar(SnackBar(content: Text(mensajeNegociacionRestringida(intento)), duration: const Duration(seconds: 8)));
+      } else {
+        mostrarError(context, e);
+      }
     } finally {
       if (mounted) setState(() => _ocupado = false);
     }
@@ -156,7 +173,7 @@ class _ContenidoState extends State<_Contenido> {
     final principal = <_AccionDef>[];
     final secundarias = <_AccionDef>[];
     final destructivas = <_AccionDef>[];
-    if (esVendedor && QuoteStateMachine.requiereRespuestaDelVendedor(q.estado)) {
+    if (esVendedor && !q.estadoDesconocido && QuoteStateMachine.requiereRespuestaDelVendedor(q.estado)) {
       principal.add(_AccionDef(
         q.oferta == null ? 'Enviar oferta' : 'Enviar nueva oferta',
         _ocupado
@@ -177,7 +194,7 @@ class _ContenidoState extends State<_Contenido> {
             : () async {
                 final motivo = await _pedirTexto('Rechazar solicitud', 'Motivo (opcional)');
                 if (motivo == null || !mounted) return;
-                await _ejecutar(() => repo.rechazarSolicitud(quoteId: q.id, vendedorUid: uid!, motivo: motivo), 'Solicitud rechazada');
+                await _ejecutar(() => repo.rechazarSolicitud(quoteId: q.id, vendedorUid: uid!, motivo: motivo), 'Solicitud rechazada', intento: 'rechazar la solicitud');
               },
       ));
     }
@@ -194,7 +211,7 @@ class _ContenidoState extends State<_Contenido> {
                         'Esto solo registra el acuerdo: Lotea Café no genera pedido ni cobra. El pago y la entrega los coordinan directamente comprador y vendedor.',
                     'Aceptar oferta',
                   );
-                  if (ok && mounted) await _ejecutar(() => repo.aceptarOferta(quoteId: q.id, compradorUid: uid!), 'Oferta aceptada');
+                  if (ok && mounted) await _ejecutar(() => repo.aceptarOferta(quoteId: q.id, compradorUid: uid!), 'Oferta aceptada', intento: 'aceptar la oferta');
                 },
         ));
       }
@@ -205,7 +222,7 @@ class _ContenidoState extends State<_Contenido> {
             : () async {
                 final c = await _pedirTexto('Solicitar ajuste', '¿Qué quieres ajustar?', obligatorio: true);
                 if (c == null || !mounted) return;
-                await _ejecutar(() => repo.solicitarRevision(quoteId: q.id, compradorUid: uid!, comentario: c), 'Ajuste solicitado');
+                await _ejecutar(() => repo.solicitarRevision(quoteId: q.id, compradorUid: uid!, comentario: c), 'Ajuste solicitado', intento: 'solicitar el ajuste');
               },
       ));
       if (efectivo == EstadoCotizacion.ofertaEnviada) {
@@ -216,30 +233,36 @@ class _ContenidoState extends State<_Contenido> {
               : () async {
                   final motivo = await _pedirTexto('Rechazar oferta', 'Motivo (opcional)');
                   if (motivo == null || !mounted) return;
-                  await _ejecutar(() => repo.rechazarOferta(quoteId: q.id, compradorUid: uid!, motivo: motivo), 'Oferta rechazada');
+                  await _ejecutar(() => repo.rechazarOferta(quoteId: q.id, compradorUid: uid!, motivo: motivo), 'Oferta rechazada', intento: 'rechazar la oferta');
                 },
         ));
       }
     }
-    if (esComprador && QuoteStateMachine.puede(q.estado, EstadoCotizacion.cancelada, ActorCotizacion.comprador)) {
+    if (esComprador && !q.estadoDesconocido && QuoteStateMachine.puede(q.estado, EstadoCotizacion.cancelada, ActorCotizacion.comprador)) {
       destructivas.add(_AccionDef(
         'Cancelar cotización',
         _ocupado
             ? null
             : () async {
                 final ok = await _confirmar('Cancelar cotización', '¿Seguro que quieres cancelar esta cotización?', 'Sí, cancelar');
-                if (ok && mounted) await _ejecutar(() => repo.cancelar(quoteId: q.id, compradorUid: uid!), 'Cotización cancelada');
+                if (ok && mounted) await _ejecutar(() => repo.cancelar(quoteId: q.id, compradorUid: uid!), 'Cotización cancelada', intento: 'cancelar la cotización');
               },
       ));
     }
 
+    // En modo de consulta no se ofrece ninguna acción (el servidor ya rechazó una por permisos).
+    if (_soloConsulta) {
+      principal.clear();
+      secundarias.clear();
+      destructivas.clear();
+    }
     // Si no hay acción principal (p. ej. oferta vencida), la primera
     // secundaria pasa a ser la protagonista para que siempre haya un camino claro.
     final promovida = principal.isEmpty && secundarias.isNotEmpty ? secundarias.first : null;
     final botonPrincipal = principal.isNotEmpty ? principal.first : promovida;
     final botonesSecundarios = secundarias.where((a) => a != promovida).toList();
-    final contraparte = esComprador ? q.sellerNombre : q.compradorNombre;
-    final tono = toneEstadoCotizacion(efectivo);
+    final contraparte = esComprador ? q.sellerNombreVisible : q.compradorNombreVisible;
+    final tono = q.estadoDesconocido ? StatusTone.neutral : toneEstadoCotizacion(efectivo);
     final requiereAccion = botonPrincipal != null;
 
     return ListView(
@@ -259,7 +282,7 @@ class _ContenidoState extends State<_Contenido> {
                   const SizedBox(height: 2),
                   Text(contraparte, maxLines: 1, overflow: TextOverflow.ellipsis, style: textTheme.bodyMedium?.copyWith(color: AppColors.inkSoft)),
                   const SizedBox(height: 8),
-                  QuoteStatusChip(estado: efectivo, corto: false),
+                  QuoteStatusChip(estado: efectivo, corto: false, desconocido: q.estadoDesconocido),
                 ],
               ),
             ),
@@ -281,12 +304,25 @@ class _ContenidoState extends State<_Contenido> {
                   const SizedBox(width: 10),
                   Expanded(
                     child: Text(
-                      _proximaAccion(efectivo, esComprador: esComprador, esVendedor: esVendedor),
+                      _soloConsulta
+                          ? 'Cotización en modo de consulta.'
+                          : q.estadoDesconocido
+                              ? mensajeEstadoNoReconocido
+                              : _proximaAccion(efectivo, esComprador: esComprador, esVendedor: esVendedor),
                       style: TextStyle(fontSize: 14, height: 1.4, fontWeight: FontWeight.w700, color: tono.foreground),
                     ),
                   ),
                 ],
               ),
+              if (_soloConsulta) ...[
+                const SizedBox(height: 12),
+                ModoConsultaBanner(
+                  key: const ValueKey('cotizacion_modo_consulta'),
+                  texto: mensajeCotizacionSoloConsulta,
+                  botonReintentarKey: const ValueKey('cotizacion_volver_a_intentar'),
+                  onReintentar: () => setState(() => _soloConsulta = false),
+                ),
+              ],
               if (botonPrincipal != null) ...[
                 const SizedBox(height: 14),
                 ElevatedButton(onPressed: botonPrincipal.onPressed, child: Text(botonPrincipal.etiqueta)),
@@ -355,8 +391,8 @@ class _ContenidoState extends State<_Contenido> {
         _Documento(
           secciones: [
             _SeccionDoc('Partes', [
-              ('Comprador', q.compradorNombre + (esComprador ? ' (tú)' : '')),
-              ('Vendedor', q.sellerNombre + (esVendedor ? ' (tú)' : '')),
+              ('Comprador', q.compradorNombreVisible + (esComprador ? ' (tú)' : '')),
+              ('Vendedor', q.sellerNombreVisible + (esVendedor ? ' (tú)' : '')),
             ]),
             _SeccionDoc('Solicitud', [
               ('Cantidad', cantidadTexto(q.cantidad, q.unidad)),

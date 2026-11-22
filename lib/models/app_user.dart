@@ -82,6 +82,23 @@ class BuyerPreferences {
   }
 }
 
+/// Estado de la cuenta (`users/{uid}.cuentaEstado`), escrito SOLO por el Worker de limpieza.
+/// Campo ausente = activa (usuarios anteriores a la etapa 6). Un valor desconocido es
+/// [desconocida]: se trata de forma conservadora (operaciones bloqueadas), nunca como activa.
+///
+/// [eliminando]: el Worker ya comenzó el borrado definitivo (etapa 7). A diferencia de
+/// [eliminacionPendiente] no hay periodo de espera ni cancelación. Hoy ningún proceso lo escribe;
+/// la app solo lo reconoce para mostrarlo bien.
+enum CuentaEstado { activa, eliminacionPendiente, eliminando, desconocida }
+
+CuentaEstado leerCuentaEstado(Object? v) {
+  if (v == null) return CuentaEstado.activa;
+  if (v == 'activa') return CuentaEstado.activa;
+  if (v == 'eliminacionPendiente') return CuentaEstado.eliminacionPendiente;
+  if (v == 'eliminando') return CuentaEstado.eliminando;
+  return CuentaEstado.desconocida;
+}
+
 /// Documento `users/{uid}`. Nunca contiene contraseñas. El rol se fija en el
 /// registro y las reglas de Firestore impiden cambiarlo después.
 class AppUser {
@@ -97,6 +114,11 @@ class AppUser {
   final DateTime? createdAt;
   final DateTime? updatedAt;
 
+  /// Control de la cuenta: SOLO LECTURA. No entra en [toEditableMap] ni en `UserRepository.actualizar`.
+  final CuentaEstado cuentaEstado;
+  final DateTime? eliminacionSolicitadaAt;
+  final DateTime? eliminacionProgramadaAt;
+
   const AppUser({
     required this.uid,
     required this.email,
@@ -109,7 +131,23 @@ class AppUser {
     this.onboardingCompleto = false,
     this.createdAt,
     this.updatedAt,
+    this.cuentaEstado = CuentaEstado.activa,
+    this.eliminacionSolicitadaAt,
+    this.eliminacionProgramadaAt,
   });
+
+  bool get cuentaActiva => cuentaEstado == CuentaEstado.activa;
+  bool get eliminacionPendiente => cuentaEstado == CuentaEstado.eliminacionPendiente;
+  bool get eliminando => cuentaEstado == CuentaEstado.eliminando;
+
+  /// Las operaciones comerciales solo se permiten con la cuenta activa (las reglas de Firestore lo exigen).
+  bool get operacionesBloqueadas => !cuentaActiva;
+
+  /// El plazo de espera terminó (la etapa 7 todavía no ejecuta el borrado: la solicitud queda pendiente de procesamiento).
+  bool plazoVencido(DateTime ahora) {
+    final programada = eliminacionProgramadaAt;
+    return programada != null && !ahora.isBefore(programada);
+  }
 
   AppUser copyWith({
     String? nombre,
@@ -131,6 +169,9 @@ class AppUser {
       onboardingCompleto: onboardingCompleto ?? this.onboardingCompleto,
       createdAt: createdAt,
       updatedAt: updatedAt,
+      cuentaEstado: cuentaEstado,
+      eliminacionSolicitadaAt: eliminacionSolicitadaAt,
+      eliminacionProgramadaAt: eliminacionProgramadaAt,
     );
   }
 
@@ -160,6 +201,9 @@ class AppUser {
       onboardingCompleto: m['onboardingCompleto'] == true,
       createdAt: readDate(m['createdAt']),
       updatedAt: readDate(m['updatedAt']),
+      cuentaEstado: leerCuentaEstado(m['cuentaEstado']),
+      eliminacionSolicitadaAt: readDate(m['eliminacionSolicitadaAt']),
+      eliminacionProgramadaAt: readDate(m['eliminacionProgramadaAt']),
     );
   }
 }
